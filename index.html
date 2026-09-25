@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>blush live | webrtc video booth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a href="#home" class="logo">blush live 🎀</a>
+  <ul class="nav-links" id="navLinks">
+    <li><a href="#home">home</a></li>
+    <li><a href="#booth">booth</a></li>
+    <li><a href="#visualizer">audio visualizer</a></li>
+  </ul>
+  <button class="nav-toggle" id="navToggle">☰</button>
+</nav>
+
+<section class="hero" id="home">
+  <div class="blob blob1"></div>
+  <div class="blob blob2"></div>
+  <div class="strip-deco left">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+  <div class="strip-deco right">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+  </div>
+  <div class="hero-badge">✨ a WebRTC video booth, right in your browser</div>
+  <h1>blush live</h1>
+  <p class="tag">turn on your cam, pick a filter, hit record — capture a lil video with your voice, then watch your mic come to life on the audio visualizer.</p>
+  <div class="cta">
+    <a href="#booth" class="btn">enter the booth 🎬</a>
+  </div>
+</section>
+
+<section id="booth">
+  <h2 class="section-title">the booth</h2>
+  <p class="section-sub">turn on your cam & mic, pick a filter, then record a short video.</p>
+  <div class="booth-wrap">
+    <div class="cam-box">
+      <video id="video" autoplay playsinline muted></video>
+      <video id="playbackVideo" class="result-canvas hidden" controls></video>
+      <div id="countOverlay"></div>
+      <div id="flashOverlay"></div>
+    </div>
+
+    <div class="booth-controls">
+      <div class="status-box">
+        <p id="camStatusText" class="status-line off">📷 Camera not connected yet</p>
+        <p id="micStatusText" class="status-line off">🎙️ Microphone not connected yet</p>
+      </div>
+
+      <h3>Filters</h3>
+      <div class="filter-row" id="filterRow"></div>
+
+      <h3 class="mt-16">Voice Effect <span class="tiny">(optional)</span></h3>
+      <select id="voiceEffectSelect" class="effect-select">
+        <option value="none">Original Voice</option>
+        <option value="robot">Robot 🤖</option>
+        <option value="echo">Echo 🌊</option>
+        <option value="deep">Deep 🐻</option>
+        <option value="radio">Radio 📻</option>
+      </select>
+
+      <div class="action-row" id="preActions">
+        <button class="btn" id="openCamBtn">Turn On Camera 🎥</button>
+        <button class="btn outline" id="recordBtn" disabled>Start Recording ⏺️</button>
+      </div>
+
+      <div class="action-row" id="recordingActions" hidden>
+        <button class="btn" id="stopBtn">Stop Recording ⏹️</button>
+      </div>
+
+      <div class="result-actions" id="resultActions">
+        <button class="btn" id="downloadVideoBtn">Save Video</button>
+        <button class="btn outline" id="retakeBtn">Ulangi 🔁</button>
+      </div>
+
+      <p class="hint">"Ulangi" clears your current recording and takes you back to the live camera view, so you can record again.</p>
+    </div>
+  </div>
+</section>
+
+<section id="visualizer">
+  <h2 class="section-title">audio visualizer</h2>
+  <p class="section-sub">real-time mic waveform, powered by AudioContext + AnalyserNode + Canvas.</p>
+  <div class="viz-wrap">
+    <canvas id="vizCanvas" width="640" height="220"></canvas>
+    <div class="action-row justify-center">
+      <button type="button" class="btn" id="startVizBtn">Start Visualizer 🎶</button>
+      <button type="button" class="btn outline" id="stopVizBtn" disabled>Stop Visualizer</button>
+    </div>
+    <p class="hint text-center">Needs the camera/mic to be turned on first (from the Booth section above) — it reuses the same mic stream.</p>
+  </div>
+</section>
+
+<footer>
+  made with 💖 Alma & Celine
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
