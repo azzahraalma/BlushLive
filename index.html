@@ -18,6 +18,7 @@
     id="navLinks">
     <li><a href="#home">home</a></li>
     <li><a href="#booth">booth</a></li>
+    <li><a href="#stream">stream</a></li>
   </ul>
   <button 
     class="nav-toggle" 
@@ -47,9 +48,16 @@
   <p class="tag">turn on your cam, serve a look, pick a filter, and hit record.
 make a lil’ video with your voice or pose for a photostrip or your audio even gets its own little dance while you record ♡</p>
   <div class="cta">
-    <a href="#booth" class="btn"><i class="fa-solid fa-clapperboard"></i> enter the booth</a>
+    <a href="#booth" class="btn"><i class="fa-solid fa-clapperboard"></i> start now</a>
   </div>
 </section>
+
+<div class="page-switch-wrap">
+  <div class="page-switch" id="pageSwitch" data-page="booth">
+    <button class="active" data-page="booth"><i class="fa-solid fa-camera-retro"></i> Booth</button>
+    <button data-page="stream"><i class="fa-solid fa-tower-broadcast"></i> Stream</button>
+  </div>
+</div>
 
 <section id="booth">
   <h2 class="section-title">the booth</h2>
@@ -198,10 +206,103 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
   </div>
 </section>
 
+<section id="stream">
+  <h2 class="section-title">live stream</h2>
+  <p class="section-sub">go live with your camera &amp; mic, or join a friend's stream with their token.</p>
+
+  <div class="mode-tabs" id="streamTabs">
+    <button class="mode-tab active" id="stTabBroadcast"><i class="fa-solid fa-tower-broadcast"></i> Broadcast</button>
+    <button class="mode-tab" id="stTabViewer"><i class="fa-solid fa-eye"></i> Watch</button>
+  </div>
+
+  <div class="stream-wrap">
+
+    <!-- BROADCAST -->
+    <div class="stream-panel" id="stBroadcastPanel">
+      <div class="st-stage">
+        <div class="stream-box" id="stBoxB">
+          <video id="stLocalVideo" autoplay playsinline muted></video>
+
+          <div class="st-badges">
+            <span class="st-live">● LIVE</span>
+            <span class="st-viewers"><i class="fa-solid fa-eye"></i> <span class="vc">0 viewers</span></span>
+          </div>
+
+          <div class="st-chat"></div>
+          <form class="st-chat-form" id="stChatFormB">
+            <input type="text" placeholder="say something…" maxlength="200" autocomplete="off">
+            <button type="submit"><i class="fa-solid fa-paper-plane"></i></button>
+          </form>
+        </div>
+
+        <div class="st-side">
+          <div class="st-pop" id="stPop" hidden></div>
+          <button class="rail-btn" id="stMirrorBtn"><i class="fa-solid fa-left-right"></i><span>Mirror off</span></button>
+          <button class="rail-btn" id="stCamBtn"><i class="fa-solid fa-video"></i><span>Cam on</span></button>
+          <button class="rail-btn" id="stMicBtn"><i class="fa-solid fa-microphone"></i><span>Mic on</span></button>
+          <button class="rail-btn" id="stFilterBtn"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Filter</span></button>
+          <button class="rail-btn" id="stVoiceBtn"><i class="fa-solid fa-wave-square"></i><span>Voice</span></button>
+        </div>
+      </div>
+
+      <h3 class="mini-label">Token (give it to your viewers)</h3>
+      <p class="stream-token" id="stToken" title="Click to copy">— — — —</p>
+      <div class="stream-actions">
+        <button class="btn" id="stStartBtn"><i class="fa-solid fa-tower-broadcast"></i> Start Broadcast</button>
+        <button class="btn outline" id="stStopBtn" style="display:none;"><i class="fa-solid fa-stop"></i> End Broadcast</button>
+      </div>
+      <p class="stream-status" id="stBroadcastStatus">press start to turn on your camera and get a token.</p>
+    </div>
+
+    <!-- WATCH -->
+    <div class="stream-panel" id="stViewerPanel" style="display:none;">
+      <div class="st-stage">
+        <div class="stream-box" id="stBoxV">
+          <video id="stRemoteVideo" autoplay playsinline muted></video>
+
+          <div class="st-badges">
+            <span class="st-live">● LIVE</span>
+            <span class="st-viewers"><i class="fa-solid fa-eye"></i> <span class="vc">0 viewers</span></span>
+          </div>
+          
+          <div class="st-host-muted" id="stHostMuted" hidden><i class="fa-solid fa-microphone-slash"></i> This live is muted</div>
+          <div class="st-muted-note" id="stMutedNote"><i class="fa-solid fa-volume-xmark"></i> Muted</div>
+
+          <div class="st-chat"></div>
+          <form class="st-chat-form" id="stChatFormV">
+            <input type="text" placeholder="write a comment…" maxlength="200" autocomplete="off">
+            <button type="submit"><i class="fa-solid fa-paper-plane"></i></button>
+          </form>
+
+          <div class="st-ended" id="stEnded" hidden>
+            <i class="fa-solid fa-circle-stop"></i>
+            <p>live has ended</p>
+            <small>thanks for watching ♡</small>
+          </div>
+        </div>
+
+        <div class="st-side">
+          <button class="rail-btn" id="stViewerMuteBtn"><i class="fa-solid fa-volume-xmark"></i><span>Muted</span></button>
+        </div>
+      </div>
+      <div class="stream-actions">
+        <input type="text" class="stream-input" id="stNameInput" placeholder="your name" maxlength="20" autocomplete="off">
+        <input type="text" class="stream-input" id="stTokenInput" placeholder="enter token" autocomplete="off">
+        <button class="btn" id="stJoinBtn"><i class="fa-solid fa-right-to-bracket"></i> Join</button>
+        <button class="btn outline" id="stLeaveBtn" style="display:none;"><i class="fa-solid fa-right-from-bracket"></i> Leave</button>
+      </div>
+      <p class="stream-status" id="stViewerStatus">enter your name and the broadcaster's token, then hit join.</p>
+    </div>
+
+  </div>
+</section>
+
 <footer>
   blush live — made with love <i class="fa-solid fa-heart"></i>
 </footer>
 
 <script src="script.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="stream.js"></script>
 </body>
 </html>
