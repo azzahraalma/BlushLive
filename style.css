@@ -715,3 +715,9 @@ footer i{ color:var(--pink-500); }
 }
 .stream-box.idle video{ opacity:0; }
 .stream-box.denied{ background:#000; }
+/* ===== Share screen / media di panel kanan ===== */
+#stShareBlock{ margin-bottom:14px; }
+#stShareBlock .stream-source-row{ justify-content:flex-start; gap:8px; }
+#stShareBlock .stream-file{ justify-content:flex-start; margin-top:8px; }
+#stShareBlock .tiny{ display:block; margin-top:6px; }
+#stShareBlock h3 .tiny{ display:inline; margin:0; }

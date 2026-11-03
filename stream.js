@@ -58,12 +58,11 @@ const stLeaveBtn = document.getElementById('stLeaveBtn');
 const stBroadcastStatus = document.getElementById('stBroadcastStatus');
 const stViewerStatus = document.getElementById('stViewerStatus');
 
-const stSrcCam = document.getElementById('stSrcCam');
 const stSrcFile = document.getElementById('stSrcFile');
 const stSrcScreen = document.getElementById('stSrcScreen');
+const stShareHint = document.getElementById('stShareHint');
 const stSourceRow = document.getElementById('stSourceRow');
 const stFileBlock = document.getElementById('stFileBlock');
-const stFileChoose = document.getElementById('stFileChoose');
 const stFileInput = document.getElementById('stFileInput');
 const stFileName = document.getElementById('stFileName');
 const stLoop = document.getElementById('stLoop');
@@ -86,11 +85,9 @@ const stNameInput = document.getElementById('stNameInput');
 
 const TOKEN_PLACEHOLDER = '— — — —';
 
-let sourceMode = 'camera'; // 'camera' | 'file' | 'screen'
-let chosenFile = null;
 
 // pengaturan yang dipilih user (dipakai sebelum start dan bisa diubah saat live)
-const settings = { ratio: '16:9', filter: 'none', mirror: false, fx: 'none', muted: false, cam: false };
+const settings = { ratio: '16:9', filter: 'none', mirror: false, fx: 'none', muted: false, cam: true };
 
 let socket = null;
 let bc = null; // active broadcast
@@ -208,6 +205,12 @@ function createPeerSignaling(){
             fire('viewer-joined', { viewerId: conn.peer, name: (conn.metadata && conn.metadata.name) || '' });
           });
         });
+        // koneksi ke PeerJS Cloud bisa putus (idle / jaringan) -> token jadi "tidak ditemukan" kalau tidak disambung lagi
+        peer.on('disconnected', () => {
+          console.warn('[stream] disconnected from signaling, reconnecting…');
+          const p = peer;
+          if(p && !p.destroyed){ try{ p.reconnect(); }catch(e){ console.warn(e); } }
+        });
         peer.on('error', onPeerError);
       }
       else if(ev === 'join-as-viewer'){
@@ -216,14 +219,24 @@ function createPeerSignaling(){
         const roomId = (payload && payload.roomId) || payload;
         const viewerName = (payload && payload.name) || '';
         peer = new Peer({ config: ICE_CONFIG });
-        peer.on('open', id => {
-          api.id = id;
+        let attempts = 0;
+        const connect = () => {
+          if(!peer || role !== 'viewer') return;
           console.log('[stream] viewer connecting to blush-' + roomId);
           const conn = peer.connect('blush-' + roomId, { serialization: 'json', reliable: true, metadata: { name: viewerName } });
           trackConn(conn);
           conn.on('open', () => { conns[conn.peer] = conn; console.log('[stream] connected to broadcaster'); });
+        };
+        peer.on('open', id => { api.id = id; connect(); });
+        peer.on('error', err => {
+          // broadcaster mungkin baru saja terdaftar -> coba lagi beberapa kali sebelum bilang "tidak ditemukan"
+          if(err && err.type === 'peer-unavailable' && attempts < 3){
+            attempts++;
+            setTimeout(connect, 1500);
+            return;
+          }
+          onPeerError(err);
         });
-        peer.on('error', onPeerError);
       }
       else if(ev === 'offer' || ev === 'answer'){
         const c = conns[payload.target];
@@ -320,7 +333,7 @@ function lockTabs(){
 // ===== MEDIA SOURCE =====
 // Semua sumber (kamera / share screen / video file) digambar ke <canvas>, jadi
 // rasio, filter, dan bubble kamera ikut terkirim ke viewer. Audio lewat Web Audio
-// (mute + voice effect). Return { stream, cleanup, endedTrack, fileEl, warning, ctl }.
+// (mute + voice effect). Return { stream, cleanup, warning, ctl }.
 function waitForVideos(list, ms){
   return new Promise(resolve => {
     const t0 = Date.now();
@@ -331,10 +344,7 @@ function waitForVideos(list, ms){
   });
 }
 
-async function createSource(mode, file){
-  const hasDisplay = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-  if(mode === 'screen' && !hasDisplay) throw new Error('screen share is not supported in this browser');
-
+async function createSource(){
   // ---- audio graph ----
   const AC = window.AudioContext || window.webkitAudioContext;
   const ac = new AC();                       // dibuat di awal (masih dalam klik user) supaya tidak "suspended"
@@ -407,104 +417,36 @@ async function createSource(mode, file){
     v.playsInline = true;
     return v;
   };
-  const camV = makeVideo();
-  let baseV = makeVideo();
+  const camV = makeVideo();    // kamera (selalu nyala selama siaran)
+  const baseV = makeVideo();   // layar yang sedang dibagikan
 
-  const raw = [];                 // semua MediaStream mentah, dihentikan saat cleanup
-  let camStream = null, camOn = false;
-  let screenStream = null, fileEl = null, fileUrl = null;
+  let camStream = null;
+  let view = 'camera';         // 'camera' | 'screen' | 'file'  (apa yang tampil besar ke viewer)
+  let bubble = settings.cam;   // bubble kamera saat share screen / media
+  let screenStream = null, screenAudioSrc = null;
+  let fileEl = null, fileUrl = null, fileNodes = [];
+  let onShareEnd = null, onFileEnd = null;
   let worker = null, fallbackTimer = null;
-  let warning = '';
+  let filterCss = 'none';
+  let mirror = settings.mirror;
 
-  const cleanup = () => {
-    if(worker){ try{ worker.terminate(); }catch(e){} worker = null; }
-    if(fallbackTimer){ clearInterval(fallbackTimer); fallbackTimer = null; }
-    oscs.forEach(o => { try{ o.stop(); }catch(e){} });
-    camV.srcObject = null;
-    baseV.srcObject = null;
-    if(fileEl){
-      fileEl.onended = null;
-      fileEl.pause();
-      fileEl.removeAttribute('src');
-      fileEl.load();
-    }
-    if(fileUrl){ URL.revokeObjectURL(fileUrl); fileUrl = null; }
-    raw.forEach(st => st.getTracks().forEach(t => t.stop()));
+  // ---- kamera + mic (selalu jadi dasar siaran) ----
+  try{
+    const st = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true });
+    camStream = st;
+    camV.srcObject = new MediaStream(st.getVideoTracks());
+    addMic(st);
+    await camV.play();
+    await waitForVideos([camV]);
+  }catch(err){
     if(camStream) camStream.getTracks().forEach(t => t.stop());
     try{ ac.close(); }catch(e){}
-  };
-
-  // nyalakan / matikan bubble kamera (untuk mode screen & file)
-  async function setCam(on){
-    if(mode === 'camera') return true;     // mode kamera: kamera selalu nyala
-    if(on){
-      if(camOn) return true;
-      const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-      camStream = s;
-      camV.srcObject = s;
-      try{ await camV.play(); }catch(e){}
-      camOn = true;
-      return true;
-    }
-    camOn = false;
-    if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
-    camV.srcObject = null;
-    return false;
-  }
-
-  try{
-    if(mode === 'camera'){
-      const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true });
-      camStream = s;
-      camOn = true;
-      camV.srcObject = new MediaStream(s.getVideoTracks());
-      addMic(s);
-      await camV.play();
-      await waitForVideos([camV]);
-    }else if(mode === 'screen'){
-      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      raw.push(screenStream);
-      baseV.srcObject = new MediaStream(screenStream.getVideoTracks());
-      if(screenStream.getAudioTracks().length){
-        ac.createMediaStreamSource(new MediaStream(screenStream.getAudioTracks())).connect(mediaGain);
-      }
-      try{
-        const m = await navigator.mediaDevices.getUserMedia({ audio: true });
-        raw.push(m);
-        addMic(m);
-      }catch(e){
-        warning = 'mic permission denied — streaming without your voice.';
-      }
-      await baseV.play();
-      await waitForVideos([baseV]);
-    }else{
-      fileUrl = URL.createObjectURL(file);
-      fileEl = makeVideo();
-      fileEl.muted = false;                  // audio lewat Web Audio, bukan lewat elemen
-      fileEl.loop = stLoop.checked;
-      fileEl.src = fileUrl;
-      const msrc = ac.createMediaElementSource(fileEl);
-      msrc.connect(mediaGain);               // ke viewer
-      msrc.connect(ac.destination);          // streamer ikut dengar
-      baseV = fileEl;
-      await fileEl.play();
-      await waitForVideos([fileEl]);
-    }
-
-    if(mode !== 'camera' && settings.cam){
-      try{ await setCam(true); }
-      catch(e){ warning = warning || 'camera permission denied — streaming without the cam bubble.'; settings.cam = false; }
-    }
-  }catch(err){
-    cleanup();
     throw err;
   }
 
   // ---- canvas compositor ----
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  let filterCss = 'none';
-  let mirror = mode === 'camera' && settings.mirror;
 
   function drawCover(v, W, H){
     const vw = v.videoWidth, vh = v.videoHeight;
@@ -526,9 +468,9 @@ async function createSource(mode, file){
     ctx.filter = 'none';
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
-    if(FILTER_OK) ctx.filter = filterCss;
 
-    if(mode === 'camera'){
+    if(view === 'camera'){
+      if(FILTER_OK) ctx.filter = filterCss;
       if(mirror){
         ctx.save();
         ctx.translate(W, 0);
@@ -540,7 +482,7 @@ async function createSource(mode, file){
       }
     }else{
       drawContain(baseV, W, H);
-      if(camOn && camV.videoWidth){
+      if(bubble && camV.videoWidth){
         // kamera bulat kecil di pojok kanan bawah
         const r = Math.round(Math.min(W, H) * 0.15);
         const cx = W - r - Math.round(W * 0.03);
@@ -566,18 +508,103 @@ async function createSource(mode, file){
   }
 
   function setRatio(key){
-    const r = RATIOS[mode === 'camera' ? key : '16:9'] || RATIOS['16:9'];
-    canvas.width = r.w;
-    canvas.height = r.h;
+    const r = RATIOS[view === 'camera' ? key : '16:9'] || RATIOS['16:9'];
+    if(canvas.width !== r.w || canvas.height !== r.h){
+      canvas.width = r.w;
+      canvas.height = r.h;
+    }
     fitBox(stLocalVideo, r.w, r.h);
     draw();
   }
   function setFilter(id){
-    const f = FILTERS.find(x => x.id === (mode === 'camera' ? id : 'none'));
+    const f = FILTERS.find(x => x.id === id);
     filterCss = f ? f.css : 'none';
   }
   setFilter(settings.filter);
   setRatio(settings.ratio);
+
+  // ---- share screen / share media (dipakai saat sudah live; tidak mengganggu koneksi viewer) ----
+  function stopShare(silent){
+    if(view === 'camera') return;
+    const was = view;
+    view = 'camera';
+    if(screenStream){
+      screenStream.getTracks().forEach(t => { t.onended = null; t.stop(); });
+      screenStream = null;
+    }
+    if(screenAudioSrc){ try{ screenAudioSrc.disconnect(); }catch(e){} screenAudioSrc = null; }
+    if(fileEl){
+      fileEl.onended = null;
+      fileEl.pause();
+      fileEl.removeAttribute('src');
+      fileEl.load();
+      fileEl = null;
+    }
+    fileNodes.forEach(n => { try{ n.disconnect(); }catch(e){} });
+    fileNodes = [];
+    if(fileUrl){ URL.revokeObjectURL(fileUrl); fileUrl = null; }
+    baseV.srcObject = null;
+    setRatio(settings.ratio);
+    if(!silent && onShareEnd) onShareEnd(was);
+  }
+
+  async function shareScreen(){
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)){
+      throw new Error('screen share is not supported in this browser');
+    }
+    const st = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    if(view !== 'camera') stopShare(true);
+    screenStream = st;
+    baseV.srcObject = new MediaStream(st.getVideoTracks());
+    if(st.getAudioTracks().length){
+      screenAudioSrc = ac.createMediaStreamSource(new MediaStream(st.getAudioTracks()));
+      screenAudioSrc.connect(mediaGain);
+    }
+    await baseV.play();
+    await waitForVideos([baseV]);
+    // user menekan "Stop sharing" dari browser -> kembali ke kamera (siaran tetap jalan)
+    st.getVideoTracks()[0].onended = () => { if(view === 'screen') stopShare(); };
+    bubble = settings.cam;
+    view = 'screen';
+    setRatio(settings.ratio);
+  }
+
+  async function shareFile(file, loop){
+    const url = URL.createObjectURL(file);
+    const el = makeVideo();
+    el.muted = false;                      // audio lewat Web Audio, bukan lewat elemen
+    el.loop = !!loop;
+    el.src = url;
+    try{
+      await el.play();
+      await waitForVideos([el]);
+    }catch(err){
+      URL.revokeObjectURL(url);
+      throw err;
+    }
+    if(view !== 'camera') stopShare(true);
+    fileUrl = url;
+    fileEl = el;
+    const msrc = ac.createMediaElementSource(el);
+    msrc.connect(mediaGain);               // ke viewer
+    msrc.connect(ac.destination);          // streamer ikut dengar
+    fileNodes = [msrc];
+    el.onended = () => { if(onFileEnd) onFileEnd(); };
+    baseV.srcObject = null;
+    bubble = settings.cam;
+    view = 'file';
+    setRatio(settings.ratio);
+  }
+
+  const cleanup = () => {
+    stopShare(true);
+    if(worker){ try{ worker.terminate(); }catch(e){} worker = null; }
+    if(fallbackTimer){ clearInterval(fallbackTimer); fallbackTimer = null; }
+    oscs.forEach(o => { try{ o.stop(); }catch(e){} });
+    camV.srcObject = null;
+    if(camStream) camStream.getTracks().forEach(t => t.stop());
+    try{ ac.close(); }catch(e){}
+  };
 
   // Timer lewat Web Worker: tab yang ditinggal (user pindah ke window yang dibagikan)
   // di-throttle browser, tapi timer di Worker tidak.
@@ -598,17 +625,14 @@ async function createSource(mode, file){
 
   return {
     stream: out,
-    endedTrack: screenStream ? screenStream.getVideoTracks()[0] : null,
-    fileEl,
-    warning,
+    warning: '',
     cleanup,
     ctl: {
       setRatio,
       setFilter,
-      setMirror(m){ mirror = mode === 'camera' && !!m; },
+      setMirror(m){ mirror = !!m; },
       setFx,
-      setCam,
-      camOn: () => camOn,
+      setCam(on){ bubble = !!on; return bubble; },
       setMuted(m){ master.gain.value = m ? 0 : 1; },
       setLoop(l){ if(fileEl) fileEl.loop = l; },
       togglePlay(){
@@ -616,7 +640,12 @@ async function createSource(mode, file){
         if(fileEl.paused){ fileEl.play().catch(() => {}); return false; }
         fileEl.pause();
         return true;   // sekarang paused
-      }
+      },
+      view: () => view,
+      shareScreen,
+      shareFile,
+      stopShare,
+      setHandlers(h){ onShareEnd = h.onShareEnd || null; onFileEnd = h.onFileEnd || null; }
     }
   };
 }
@@ -668,7 +697,7 @@ function hideOverlay(){
 
 function refreshStartBtn(){
   // mode kamera: izin kamera & mic harus diberikan dulu (tombol Turn On Camera)
-  stStartBtn.disabled = !bc && sourceMode === 'camera' && !pre;
+  stStartBtn.disabled = !bc && !pre;
 }
 
 function closePreview(){
@@ -683,25 +712,18 @@ function closePreview(){
 function resetPreviewUI(){
   stLocalVideo.srcObject = null;
   setBoxState('idle');
-  const camera = sourceMode === 'camera';
-  if(camera){
-    showOverlay({ icon: 'fa-camera', text: 'Camera not connected yet' },
-                { icon: 'fa-microphone', text: 'Microphone not connected yet' });
-  }else if(sourceMode === 'screen'){
-    showOverlay({ icon: 'fa-display', text: 'Screen not shared yet' }, null);
-  }else{
-    showOverlay({ icon: 'fa-file-video', text: 'No media playing yet' }, null);
-  }
-  stOpenCamBtn.style.display = camera ? '' : 'none';
+  showOverlay({ icon: 'fa-camera', text: 'Camera not connected yet' },
+              { icon: 'fa-microphone', text: 'Microphone not connected yet' });
+  stOpenCamBtn.style.display = '';
   stOpenCamBtn.disabled = false;
-  const r = RATIOS[camera ? settings.ratio : '16:9'];
+  const r = RATIOS[settings.ratio];
   fitBox(stLocalVideo, r.w, r.h);
   refreshStartBtn();
 }
 
 // minta izin kamera + mic dulu, preview jelas (dengan ratio / filter / mirror) sebelum mulai siaran
 async function turnOnCamera(){
-  if(pre || bc || sourceMode !== 'camera') return;
+  if(pre || bc) return;
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     setBoxState('denied');
     showOverlay({ icon: 'fa-camera', text: 'Camera needs https — open the https:// address', kind: 'warn' }, null);
@@ -711,8 +733,8 @@ async function turnOnCamera(){
   showOverlay({ icon: 'fa-camera', text: 'Please allow camera access in your browser…', kind: 'warn' },
               { icon: 'fa-microphone', text: 'Please allow microphone access…', kind: 'warn' });
   try{
-    const src = await createSource('camera', null);
-    if(sourceMode !== 'camera' || bc){        // user pindah mode saat menunggu izin
+    const src = await createSource();
+    if(bc){
       src.cleanup();
       src.stream.getTracks().forEach(t => t.stop());
       stLocalVideo.srcObject = null;
@@ -736,27 +758,31 @@ async function turnOnCamera(){
   refreshStartBtn();
 }
 
-function setSourceMode(mode, force){
-  if(bc) return;
-  if(mode === sourceMode && !force) return;
+// ===== Share screen / Share media (panel kanan, baru aktif setelah live) =====
+function refreshShareUI(){
+  const live = !!bc;
+  const v = live ? bc.source.ctl.view() : 'camera';
+  stSrcScreen.disabled = !live;
+  stSrcFile.disabled = !live;
+  stSrcScreen.classList.toggle('active', v === 'screen');
+  stSrcFile.classList.toggle('active', v === 'file');
+  stSrcScreen.innerHTML = v === 'screen'
+    ? '<i class="fa-solid fa-stop"></i> Stop sharing screen'
+    : '<i class="fa-solid fa-display"></i> Share screen';
+  stSrcFile.innerHTML = v === 'file'
+    ? '<i class="fa-solid fa-stop"></i> Stop sharing media'
+    : '<i class="fa-solid fa-file-video"></i> Share media';
+  stFileBlock.style.display = v === 'file' ? 'flex' : 'none';
+  stCamBtn.style.display = v === 'camera' ? 'none' : '';
+  stShareHint.style.display = live ? 'none' : '';
+  if(v === 'file') refreshPlayBtn(false);
+}
+
+function initBroadcastUI(){
   closePreview();
-  sourceMode = mode;
-  const camera = mode === 'camera';
-  stSrcCam.classList.toggle('active', camera);
-  stSrcFile.classList.toggle('active', mode === 'file');
-  if(stSrcScreen) stSrcScreen.classList.toggle('active', mode === 'screen');
-  stFileBlock.style.display = mode === 'file' ? 'flex' : 'none';
-  // tombol Cam on/off hanya untuk share screen / share media
-  stCamBtn.style.display = camera ? 'none' : '';
-  // ratio, filter, mirror hanya untuk mode kamera
-  stFrameBlock.style.display = camera ? '' : 'none';
-  stFilterBlock.style.display = (camera && FILTER_OK) ? '' : 'none';
-  stMirrorBlock.style.display = camera ? '' : 'none';
   resetPreviewUI();
-  setStatus(stBroadcastStatus,
-    mode === 'file'   ? 'choose a video to share, then press start. tap "Cam" if you want your face in the corner.' :
-    mode === 'screen' ? 'press start, then pick a screen / window / tab to share (tick "share audio" for sound). tap "Cam" to show your face in the corner.' :
-                        'press "Turn On Camera" and allow camera & mic access first, then press start broadcast.');
+  refreshShareUI();
+  setStatus(stBroadcastStatus, 'press "Turn On Camera" and allow camera & mic access first, then press start broadcast.');
 }
 
 // ===== BROADCASTER =====
@@ -772,39 +798,13 @@ async function startBroadcast(){
     return;
   }
 
-  let source;
-  if(sourceMode === 'camera'){
-    if(!pre){
-      setStatus(stBroadcastStatus, 'turn on your camera & mic first.', 'warn');
-      refreshStartBtn();
-      return;
-    }
-    source = pre;      // pakai kamera yang sudah menyala (preview)
-    pre = null;
-  }else{
-    if(sourceMode === 'screen' && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)){
-      setStatus(stBroadcastStatus, 'mic access needs https — open the https:// address of the site.', 'warn');
-      refreshStartBtn();
-      return;
-    }
-    if(sourceMode === 'file' && !chosenFile){
-      setStatus(stBroadcastStatus, 'choose a video file first.', 'warn');
-      refreshStartBtn();
-      return;
-    }
-    setStatus(stBroadcastStatus,
-      sourceMode === 'file' ? 'loading your video…' : 'waiting for you to pick what to share…');
-    try{
-      source = await createSource(sourceMode, chosenFile);
-    }catch(err){
-      console.error(err);
-      setStatus(stBroadcastStatus,
-        sourceMode === 'file' ? 'could not play that file — try another video (mp4 / webm).' :
-                                'screen share was cancelled, or is not supported here.', 'warn');
-      refreshStartBtn();
-      return;
-    }
+  if(!pre){
+    setStatus(stBroadcastStatus, 'turn on your camera & mic first.', 'warn');
+    refreshStartBtn();
+    return;
   }
+  const source = pre;      // pakai kamera yang sudah menyala (preview)
+  pre = null;
   const localStream = source.stream;
 
   const roomId = Math.random().toString(36).substring(2, 10);
@@ -812,7 +812,7 @@ async function startBroadcast(){
   const names = {};                       // viewerId -> nama viewer
   const modeTag = s.isPeer ? 'online' : 'local server';
   let signalReady = !s.isPeer;
-  stToken.textContent = roomId;
+  stToken.textContent = s.isPeer ? 'connecting…' : roomId;   // token baru ditampilkan setelah terdaftar di signaling
 
   function updateViewerCount(){
     if(!signalReady){ setStatus(stBroadcastStatus, 'connecting to signaling service…'); return; }
@@ -873,7 +873,7 @@ async function startBroadcast(){
     if(pc) addCandidate(pc, candidate);
   };
 
-  const onSignalReady = () => { signalReady = true; updateViewerCount(); };
+  const onSignalReady = () => { signalReady = true; stToken.textContent = roomId; updateViewerCount(); };
   const onSignalError = ({ message }) => setStatus(stBroadcastStatus, message, 'warn');
 
   s.on('viewer-joined', onViewerJoined);
@@ -888,30 +888,22 @@ async function startBroadcast(){
   setBoxState('live');
   hideOverlay();
 
-  // share screen: kalau user menekan "Stop sharing" dari browser -> broadcast ikut berhenti
-  if(source.endedTrack){
-    source.endedTrack.addEventListener('ended', () => { if(bc) stopBroadcast('screen share ended — broadcast stopped.'); });
-  }
-  // file video: kalau tidak loop & sudah habis, kasih info
-  if(source.fileEl){
-    source.fileEl.onended = () => {
+  // share screen / media saat live: kalau berhenti sendiri (mis. tombol "Stop sharing" browser), kembali ke kamera
+  source.ctl.setHandlers({
+    onShareEnd: () => {
+      refreshShareUI();
+      if(bc) setStatus(stBroadcastStatus, 'sharing stopped — back to your camera.', 'on');
+    },
+    onFileEnd: () => {
       refreshPlayBtn(true);
-      if(bc) setStatus(stBroadcastStatus, 'video finished — press Play to watch again, or stop the broadcast.', 'warn');
-    };
-    stFilePlayBtn.style.display = '';
-    refreshPlayBtn(false);
-  }
-
-  if(sourceMode !== 'camera'){
-    settings.cam = source.ctl.camOn();
-    refreshCamBtn();
-  }
+      if(bc) setStatus(stBroadcastStatus, 'video finished — press Play to watch again, or stop sharing.', 'warn');
+    }
+  });
 
   stStopBtn.style.display = '';
   stStartBtn.style.display = 'none';
-  stSourceRow.classList.add('locked');
   stRatioRow.classList.add('locked');
-  stFileChoose.classList.add('locked');
+  refreshShareUI();
   lockTabs();
   updateViewerCount();
   if(source.warning) setStatus(stBroadcastStatus, source.warning, 'warn');
@@ -932,10 +924,8 @@ function stopBroadcast(message){
   bc.localStream.getTracks().forEach(t => t.stop());
   bc.source.cleanup();
   bc = null;
-  stSourceRow.classList.remove('locked');
   stRatioRow.classList.remove('locked');
-  stFileChoose.classList.remove('locked');
-  stFilePlayBtn.style.display = 'none';
+  refreshShareUI();
 
   stToken.textContent = TOKEN_PLACEHOLDER;
   stStopBtn.style.display = 'none';
@@ -1001,7 +991,7 @@ async function startView(roomId, name){
 
   // token salah / broadcaster tidak live
   const onNoStream = () => {
-    leaveView('no live stream with that token — check it and try again.', 'warn');
+    leaveView('no live stream with that token — check the token, and make sure the broadcaster is live (their status should say "live (online)").', 'warn');
   };
   // broadcaster menghentikan stream
   const onStreamEnded = () => {
@@ -1065,26 +1055,63 @@ function leaveView(message, kind){
 stTabBroadcast.onclick = () => switchStreamTab('broadcast');
 stTabViewer.onclick = () => switchStreamTab('viewer');
 
-stSrcCam.onclick = () => { if(!bc) setSourceMode('camera'); };
-stSrcFile.onclick = () => { if(!bc) setSourceMode('file'); };
-if(stSrcScreen){
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
-    stSrcScreen.style.display = 'none';   // HP / browser yang tidak support share screen
-  }else{
-    stSrcScreen.onclick = () => { if(!bc) setSourceMode('screen'); };
-  }
+if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
+  stSrcScreen.style.display = 'none';   // HP / browser yang tidak support share screen
 }
-stFileInput.onchange = () => {
+
+stSrcScreen.onclick = async () => {
+  if(!bc) return;
+  const ctl = bc.source.ctl;
+  if(ctl.view() === 'screen'){
+    ctl.stopShare(true);
+    refreshShareUI();
+    setStatus(stBroadcastStatus, 'stopped sharing — back to your camera.', 'on');
+    return;
+  }
+  stSrcScreen.disabled = true;
+  stSrcFile.disabled = true;
+  try{
+    await ctl.shareScreen();
+    setStatus(stBroadcastStatus, 'sharing your screen — your viewers can see it now. tap "Cam" to show / hide your face.', 'on');
+  }catch(err){
+    console.warn(err);
+    setStatus(stBroadcastStatus, 'screen share was cancelled, or is not supported here.', 'warn');
+  }
+  refreshShareUI();
+};
+
+stSrcFile.onclick = () => {
+  if(!bc) return;
+  const ctl = bc.source.ctl;
+  if(ctl.view() === 'file'){
+    ctl.stopShare(true);
+    refreshShareUI();
+    setStatus(stBroadcastStatus, 'stopped sharing — back to your camera.', 'on');
+    return;
+  }
+  stFileInput.value = '';
+  stFileInput.click();
+};
+
+stFileInput.onchange = async () => {
   const f = stFileInput.files && stFileInput.files[0];
-  if(!f) return;
+  if(!f || !bc) return;
   if(!f.type.startsWith('video/')){
     setStatus(stBroadcastStatus, 'that is not a video file.', 'warn');
     stFileInput.value = '';
     return;
   }
-  chosenFile = f;
   stFileName.textContent = f.name;
-  setStatus(stBroadcastStatus, 'ready — press start to go live with this video.');
+  stSrcScreen.disabled = true;
+  stSrcFile.disabled = true;
+  try{
+    await bc.source.ctl.shareFile(f, stLoop.checked);
+    setStatus(stBroadcastStatus, 'sharing your video — your viewers can see it now. tap "Cam" to show / hide your face.', 'on');
+  }catch(err){
+    console.warn(err);
+    setStatus(stBroadcastStatus, 'could not play that file — try another video (mp4 / webm).', 'warn');
+  }
+  refreshShareUI();
 };
 stLoop.onchange = () => { if(bc) bc.source.ctl.setLoop(stLoop.checked); };
 stFilePlayBtn.onclick = () => {
@@ -1092,23 +1119,10 @@ stFilePlayBtn.onclick = () => {
   refreshPlayBtn(bc.source.ctl.togglePlay());
 };
 
-// Cam on/off (bubble kamera) — bisa dinyalakan / dimatikan kapan saja saat live
-stCamBtn.onclick = async () => {
-  const want = !settings.cam;
-  if(!bc){
-    settings.cam = want;
-    refreshCamBtn();
-    return;
-  }
-  stCamBtn.disabled = true;
-  try{
-    settings.cam = await bc.source.ctl.setCam(want);
-  }catch(err){
-    console.warn(err);
-    settings.cam = false;
-    setStatus(stBroadcastStatus, 'could not turn on the camera — check the browser permission.', 'warn');
-  }
-  stCamBtn.disabled = false;
+// Cam on/off (bubble kamera di pojok) — hanya muncul saat share screen / media
+stCamBtn.onclick = () => {
+  if(!bc) return;
+  settings.cam = bc.source.ctl.setCam(!settings.cam);
   refreshCamBtn();
 };
 
@@ -1204,7 +1218,7 @@ stRemoteVideo.addEventListener('resize', fitRemote);
 stToken.textContent = TOKEN_PLACEHOLDER;
 refreshCamBtn();
 refreshMuteBtn();
-setSourceMode('camera', true);
+initBroadcastUI();
 switchStreamTab('broadcast');
 
 // siapkan signaling dari awal (load PeerJS di background) supaya

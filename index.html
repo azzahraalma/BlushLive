@@ -233,19 +233,6 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
             </div>
           </div>
 
-          <div class="filter-row stream-source-row" id="stSourceRow">
-            <button type="button" class="filter-chip active" id="stSrcCam"><i class="fa-solid fa-video"></i> Camera</button>
-            <button type="button" class="filter-chip" id="stSrcScreen"><i class="fa-solid fa-display"></i> Share screen</button>
-            <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Share media</button>
-          </div>
-          <div class="stream-file" id="stFileBlock" style="display:none;">
-            <label class="btn outline" for="stFileInput" id="stFileChoose"><i class="fa-solid fa-folder-open"></i> Choose video</label>
-            <input type="file" id="stFileInput" accept="video/*" hidden>
-            <span class="stream-filename" id="stFileName">no file chosen</span>
-            <label class="stream-loop"><input type="checkbox" id="stLoop" checked> loop</label>
-            <button type="button" class="btn outline" id="stFilePlayBtn" style="display:none;"><i class="fa-solid fa-pause"></i> <span class="txt">Pause</span></button>
-          </div>
-
           <div id="stFrameBlock" style="width:100%;">
             <h3 class="mini-label">Frame</h3>
             <div class="frame-action-row">
@@ -270,6 +257,21 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
         </div>
 
         <div class="booth-controls" id="stControls">
+          <div id="stShareBlock">
+            <h3>Share <span class="tiny">(available once you're live)</span></h3>
+            <div class="filter-row stream-source-row" id="stSourceRow">
+              <button type="button" class="filter-chip" id="stSrcScreen" disabled><i class="fa-solid fa-display"></i> Share screen</button>
+              <button type="button" class="filter-chip" id="stSrcFile" disabled><i class="fa-solid fa-file-video"></i> Share media</button>
+            </div>
+            <input type="file" id="stFileInput" accept="video/*" hidden>
+            <div class="stream-file" id="stFileBlock" style="display:none;">
+              <span class="stream-filename" id="stFileName">no file chosen</span>
+              <label class="stream-loop"><input type="checkbox" id="stLoop" checked> loop</label>
+              <button type="button" class="btn outline" id="stFilePlayBtn"><i class="fa-solid fa-pause"></i> <span class="txt">Pause</span></button>
+            </div>
+            <p class="tiny" id="stShareHint">press "Start Broadcast" to unlock screen &amp; media sharing.</p>
+          </div>
+
           <div class="stream-ctrl-row">
             <button type="button" class="btn outline" id="stCamBtn" style="display:none;"><i class="fa-solid fa-video-slash"></i> <span class="txt">Cam off</span></button>
             <button type="button" class="btn outline" id="stMuteBtn"><i class="fa-solid fa-microphone"></i> <span class="txt">Mute audio</span></button>
