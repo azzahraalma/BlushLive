@@ -479,7 +479,7 @@ nav{
 }
 
 .stream-wrap{
-  max-width:640px;
+  max-width:960px;
   margin:0 auto;
 }
 .stream-panel{
@@ -680,3 +680,38 @@ footer i{ color:var(--pink-500); }
 }
 .filter-row.locked, .stream-file label.locked{ opacity:.5; pointer-events:none; }
 .stream-box{ transition: aspect-ratio .25s ease; }
+
+/* ===== Layout stream seperti booth: frame di kiri, kontrol di kanan ===== */
+.stream-booth{
+  display:flex;
+  gap:22px;
+  flex-wrap:wrap;
+  justify-content:center;
+  align-items:flex-start;
+  width:100%;
+}
+.stream-main{
+  width:560px;
+  max-width:100%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:10px;
+}
+#stViewerPanel{ max-width:640px; margin:0 auto; }
+.stream-ctrl-row{ justify-content:flex-start; margin-bottom:14px; }
+
+/* preview: blur (sebelum izin) -> hitam (ditolak) -> jelas (diizinkan) */
+.stream-box.idle{ background:#ffe3f0; }
+.stream-box.idle::before{
+  content:'';
+  position:absolute;
+  inset:-30px;
+  background:
+    radial-gradient(circle at 25% 30%, var(--pink-300) 0, transparent 45%),
+    radial-gradient(circle at 75% 65%, var(--pink-400) 0, transparent 50%),
+    radial-gradient(circle at 55% 20%, #fff 0, transparent 40%);
+  filter:blur(24px);
+}
+.stream-box.idle video{ opacity:0; }
+.stream-box.denied{ background:#000; }

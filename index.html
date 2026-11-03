@@ -222,58 +222,83 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
   <div class="stream-wrap">
 
     <div class="stream-panel" id="stBroadcastPanel">
-      <div class="stream-box">
-        <video id="stLocalVideo" autoplay playsinline muted></video>
-      </div>
+      <div class="stream-booth">
 
-      <div class="filter-row stream-source-row" id="stSourceRow">
-        <button type="button" class="filter-chip active" id="stSrcCam"><i class="fa-solid fa-video"></i> Camera</button>
-        <button type="button" class="filter-chip" id="stSrcScreen"><i class="fa-solid fa-display"></i> Share screen</button>
-        <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Share media</button>
-      </div>
-      <div class="stream-file" id="stFileBlock" style="display:none;">
-        <label class="btn outline" for="stFileInput" id="stFileChoose"><i class="fa-solid fa-folder-open"></i> Choose video</label>
-        <input type="file" id="stFileInput" accept="video/*" hidden>
-        <span class="stream-filename" id="stFileName">no file chosen</span>
-        <label class="stream-loop"><input type="checkbox" id="stLoop" checked> loop</label>
-        <button type="button" class="btn outline" id="stFilePlayBtn" style="display:none;"><i class="fa-solid fa-pause"></i> <span class="txt">Pause</span></button>
-      </div>
+        <div class="stream-main">
+          <div class="stream-box idle">
+            <video id="stLocalVideo" autoplay playsinline muted></video>
+            <div class="status-overlay" id="stStatusOverlay">
+              <p id="stCamLine" class="status-line off"><i class="fa-solid fa-camera"></i> <span class="txt">Camera not connected yet</span></p>
+              <p id="stMicLine" class="status-line off"><i class="fa-solid fa-microphone"></i> <span class="txt">Microphone not connected yet</span></p>
+            </div>
+          </div>
 
-      <div class="stream-tools">
-        <div class="stream-ctrl-row">
-          <button type="button" class="btn outline" id="stCamBtn" style="display:none;"><i class="fa-solid fa-video-slash"></i> <span class="txt">Cam off</span></button>
-          <button type="button" class="btn outline" id="stMuteBtn"><i class="fa-solid fa-microphone"></i> <span class="txt">Mute audio</span></button>
+          <div class="filter-row stream-source-row" id="stSourceRow">
+            <button type="button" class="filter-chip active" id="stSrcCam"><i class="fa-solid fa-video"></i> Camera</button>
+            <button type="button" class="filter-chip" id="stSrcScreen"><i class="fa-solid fa-display"></i> Share screen</button>
+            <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Share media</button>
+          </div>
+          <div class="stream-file" id="stFileBlock" style="display:none;">
+            <label class="btn outline" for="stFileInput" id="stFileChoose"><i class="fa-solid fa-folder-open"></i> Choose video</label>
+            <input type="file" id="stFileInput" accept="video/*" hidden>
+            <span class="stream-filename" id="stFileName">no file chosen</span>
+            <label class="stream-loop"><input type="checkbox" id="stLoop" checked> loop</label>
+            <button type="button" class="btn outline" id="stFilePlayBtn" style="display:none;"><i class="fa-solid fa-pause"></i> <span class="txt">Pause</span></button>
+          </div>
+
+          <div id="stFrameBlock" style="width:100%;">
+            <h3 class="mini-label">Frame</h3>
+            <div class="frame-action-row">
+              <div class="filter-row" id="stRatioRow">
+                <button type="button" class="filter-chip" data-ratio="3:4">3:4</button>
+                <button type="button" class="filter-chip active" data-ratio="16:9">16:9</button>
+                <button type="button" class="filter-chip" data-ratio="9:16">9:16</button>
+              </div>
+              <div class="frame-actions">
+                <button type="button" class="btn" id="stOpenCamBtn"><i class="fa-solid fa-video"></i> Turn On Camera</button>
+              </div>
+            </div>
+          </div>
+
+          <h3 class="mini-label">Token (give it to your viewers)</h3>
+          <p class="stream-token" id="stToken" title="Click to copy">— — — —</p>
+          <div class="stream-actions">
+            <button class="btn" id="stStartBtn"><i class="fa-solid fa-tower-broadcast"></i> Start Broadcast</button>
+            <button class="btn outline" id="stStopBtn" style="display:none;"><i class="fa-solid fa-stop"></i> Stop Broadcast</button>
+          </div>
+          <p class="stream-status" id="stBroadcastStatus">press "Turn On Camera" and allow camera &amp; mic access first, then press start broadcast.</p>
         </div>
 
-        <h3 class="mini-label">Ratio</h3>
-        <div class="filter-row" id="stRatioRow">
-          <button type="button" class="filter-chip active" data-ratio="16:9">16:9</button>
-          <button type="button" class="filter-chip" data-ratio="9:16">9:16</button>
-          <button type="button" class="filter-chip" data-ratio="3:4">3:4</button>
+        <div class="booth-controls" id="stControls">
+          <div class="stream-ctrl-row">
+            <button type="button" class="btn outline" id="stCamBtn" style="display:none;"><i class="fa-solid fa-video-slash"></i> <span class="txt">Cam off</span></button>
+            <button type="button" class="btn outline" id="stMuteBtn"><i class="fa-solid fa-microphone"></i> <span class="txt">Mute audio</span></button>
+          </div>
+
+          <div id="stFilterBlock">
+            <h3>Filters</h3>
+            <div class="filter-row" id="stFilterRow"></div>
+          </div>
+
+          <div id="stMirrorBlock">
+            <h3 style="margin-top:14px;">Mirror</h3>
+            <div class="filter-row" id="stMirrorRow">
+              <button type="button" class="filter-chip active" data-mirror="off">Mirror Off</button>
+              <button type="button" class="filter-chip" data-mirror="on">Mirror On</button>
+            </div>
+          </div>
+
+          <h3 style="margin-top:14px;">Voice Effect <span class="tiny">(optional)</span></h3>
+          <select id="stFxSelect" class="effect-select">
+            <option value="none">Original Voice</option>
+            <option value="robot">Robot</option>
+            <option value="echo">Echo</option>
+            <option value="deep">Deep</option>
+            <option value="radio">Radio</option>
+          </select>
         </div>
 
-        <div id="stFilterBlock">
-          <h3 class="mini-label">Filter</h3>
-          <div class="filter-row" id="stFilterRow"></div>
-        </div>
-
-        <h3 class="mini-label">Audio effect <span class="tiny">(your mic)</span></h3>
-        <select id="stFxSelect" class="effect-select">
-          <option value="none">Original Voice</option>
-          <option value="robot">Robot</option>
-          <option value="echo">Echo</option>
-          <option value="deep">Deep</option>
-          <option value="radio">Radio</option>
-        </select>
       </div>
-
-      <h3 class="mini-label">Token (give it to your viewers)</h3>
-      <p class="stream-token" id="stToken" title="Click to copy">— — — —</p>
-      <div class="stream-actions">
-        <button class="btn" id="stStartBtn"><i class="fa-solid fa-tower-broadcast"></i> Start Broadcast</button>
-        <button class="btn outline" id="stStopBtn" style="display:none;"><i class="fa-solid fa-stop"></i> Stop Broadcast</button>
-      </div>
-      <p class="stream-status" id="stBroadcastStatus">pick a source (camera, share screen, or share media), then press start to get a token.</p>
     </div>
 
     <div class="stream-panel" id="stViewerPanel" style="display:none;">
@@ -281,11 +306,12 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
         <video id="stRemoteVideo" autoplay playsinline muted controls></video>
       </div>
       <div class="stream-actions">
+        <input type="text" class="stream-input" id="stNameInput" placeholder="your name" maxlength="24" autocomplete="off">
         <input type="text" class="stream-input" id="stTokenInput" placeholder="enter token" autocomplete="off">
         <button class="btn" id="stJoinBtn"><i class="fa-solid fa-right-to-bracket"></i> Join</button>
         <button class="btn outline" id="stLeaveBtn" style="display:none;"><i class="fa-solid fa-right-from-bracket"></i> Leave</button>
       </div>
-      <p class="stream-status" id="stViewerStatus">type the broadcaster's token and hit join. tap the video's speaker icon to unmute.</p>
+      <p class="stream-status" id="stViewerStatus">enter your name and the broadcaster's token, then hit join. tap the video's speaker icon to unmute.</p>
     </div>
 
   </div>
