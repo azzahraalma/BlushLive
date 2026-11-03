@@ -609,3 +609,47 @@ footer i{ color:var(--pink-500); }
     justify-content:flex-end; 
   }
 }
+
+/* ===== Slider Booth / Stream ===== */
+.switch-wrap{ padding: 36px 6vw 0; }
+.section-switch{
+  position:relative;
+  display:flex;
+  width:min(360px, 88vw);
+  margin:0 auto;
+  padding:5px;
+  background:#fff;
+  border:2px solid var(--pink-200);
+  border-radius:999px;
+  box-shadow:var(--shadow);
+  scroll-margin-top:84px;
+}
+.section-switch .switch-pill{
+  position:absolute;
+  top:5px; bottom:5px; left:5px;
+  width:calc(50% - 5px);
+  border-radius:999px;
+  background:linear-gradient(135deg, var(--pink-500), var(--pink-600));
+  box-shadow:0 6px 16px rgba(230,64,138,0.3);
+  transition:transform .35s cubic-bezier(.4,0,.2,1);
+}
+.section-switch[data-active="stream"] .switch-pill{ transform:translateX(100%); }
+.section-switch button{
+  position:relative; z-index:1;
+  flex:1;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  padding:11px 0;
+  background:none; border:0; border-radius:999px;
+  font-family:inherit; font-size:14px; font-weight:600;
+  color:var(--pink-700);
+  cursor:pointer;
+  transition:color .3s;
+}
+.section-switch button.active{ color:#fff; }
+
+.pane-off{ display:none !important; }
+.pane-in{ animation:paneIn .4s ease both; }
+@keyframes paneIn{
+  from{ opacity:0; transform:translateY(14px); }
+  to{ opacity:1; transform:none; }
+}

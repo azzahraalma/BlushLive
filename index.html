@@ -52,6 +52,17 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
   </div>
 </section>
 
+<!-- ===== EDIT 1: slider Booth / Stream + pembungkus .panes ===== -->
+<div class="switch-wrap">
+  <div class="section-switch" id="sectionSwitch" data-active="booth" role="tablist">
+    <span class="switch-pill"></span>
+    <button type="button" class="active" data-pane="booth" role="tab"><i class="fa-solid fa-camera-retro"></i> Booth</button>
+    <button type="button" data-pane="stream" role="tab"><i class="fa-solid fa-tower-broadcast"></i> Stream</button>
+  </div>
+</div>
+
+<div class="panes">
+
 <section id="booth">
   <h2 class="section-title">the booth</h2>
   <p class="section-sub">turn on your cam &amp; mic, pick a mode, then capture something cute.</p>
@@ -219,6 +230,8 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
         <button type="button" class="filter-chip active" id="stSrcCam"><i class="fa-solid fa-video"></i> Camera</button>
         <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Video file</button>
         <button type="button" class="filter-chip" id="stSrcScreen"><i class="fa-solid fa-display"></i> Share screen</button>
+        <!-- EDIT 3: sumber ke-4 -->
+        <button type="button" class="filter-chip" id="stSrcScreenCam"><i class="fa-solid fa-user-group"></i> Screen + cam</button>
       </div>
       <div class="stream-file" id="stFileBlock" style="display:none;">
         <label class="btn outline" for="stFileInput"><i class="fa-solid fa-folder-open"></i> Choose video</label>
@@ -251,6 +264,8 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
   </div>
 </section>
 
+</div><!-- /.panes (EDIT 2) -->
+
 <footer>
   blush live — made with love <i class="fa-solid fa-heart"></i>
 </footer>
@@ -258,5 +273,45 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
 <script src="script.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script src="stream.js"></script>
+
+<!-- EDIT 4: script slider -->
+<script>
+// ===== Slider Booth / Stream: yang kebuka cuma satu section =====
+(function(){
+  const sw = document.getElementById('sectionSwitch');
+  const panes = { booth: document.getElementById('booth'), stream: document.getElementById('stream') };
+
+  function openPane(name, scroll){
+    if(!panes[name]) name = 'booth';
+    Object.keys(panes).forEach(k => {
+      const el = panes[k];
+      const on = k === name;
+      el.classList.toggle('pane-off', !on);
+      if(on){ el.classList.remove('pane-in'); void el.offsetWidth; el.classList.add('pane-in'); }
+    });
+    sw.dataset.active = name;
+    sw.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.pane === name));
+    try{ history.replaceState(null, '', '#' + name); }catch(e){}
+    if(scroll) sw.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  sw.querySelectorAll('button').forEach(b => b.addEventListener('click', () => openPane(b.dataset.pane, false)));
+
+  // link nav / tombol "enter the booth" yang menuju #booth atau #stream
+  document.querySelectorAll('a[href="#booth"], a[href="#stream"]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      openPane(a.getAttribute('href').slice(1), true);
+    });
+  });
+
+  window.addEventListener('hashchange', () => {
+    const h = location.hash.slice(1);
+    if(panes[h]) openPane(h, false);
+  });
+
+  openPane(location.hash === '#stream' ? 'stream' : 'booth', false);
+})();
+</script>
 </body>
 </html>
