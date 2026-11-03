@@ -2,28 +2,36 @@
 'use strict';
 
 const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const $ = id => document.getElementById(id);
+
+const streamTabs = document.getElementById('streamTabs');
+const stTabBroadcast = document.getElementById('stTabBroadcast');
+const stTabViewer = document.getElementById('stTabViewer');
+const stBroadcastPanel = document.getElementById('stBroadcastPanel');
+const stViewerPanel = document.getElementById('stViewerPanel');
+
+const stLocalVideo = document.getElementById('stLocalVideo');
+const stRemoteVideo = document.getElementById('stRemoteVideo');
+const stToken = document.getElementById('stToken');
+const stStartBtn = document.getElementById('stStartBtn');
+const stStopBtn = document.getElementById('stStopBtn');
+const stTokenInput = document.getElementById('stTokenInput');
+const stJoinBtn = document.getElementById('stJoinBtn');
+const stLeaveBtn = document.getElementById('stLeaveBtn');
+const stBroadcastStatus = document.getElementById('stBroadcastStatus');
+const stViewerStatus = document.getElementById('stViewerStatus');
+
+const stSrcCam = document.getElementById('stSrcCam');
+const stSrcFile = document.getElementById('stSrcFile');
+const stSourceRow = document.getElementById('stSourceRow');
+const stFileBlock = document.getElementById('stFileBlock');
+const stFileInput = document.getElementById('stFileInput');
+const stFileName = document.getElementById('stFileName');
+const stLoop = document.getElementById('stLoop');
+
 const TOKEN_PLACEHOLDER = '— — — —';
-const NO_SERVER_MSG = 'stream server not reachable — open this page from the blush live server (https://<your-ip>:8080)';
-const VOICES = [['none','Original'],['robot','Robot'],['echo','Echo'],['deep','Deep'],['radio','Radio']];
 
-// page switch (booth <-> stream)
-const boothSec = $('booth'), streamSec = $('stream'), pageSwitch = $('pageSwitch');
-
-// stream tabs + panels
-const streamTabs = $('streamTabs'), stTabBroadcast = $('stTabBroadcast'), stTabViewer = $('stTabViewer');
-const stBroadcastPanel = $('stBroadcastPanel'), stViewerPanel = $('stViewerPanel');
-const boxB = $('stBoxB'), boxV = $('stBoxV');
-
-const stLocalVideo = $('stLocalVideo'), stRemoteVideo = $('stRemoteVideo');
-const stToken = $('stToken'), stStartBtn = $('stStartBtn'), stStopBtn = $('stStopBtn');
-const stNameInput = $('stNameInput'), stTokenInput = $('stTokenInput'), stJoinBtn = $('stJoinBtn'), stLeaveBtn = $('stLeaveBtn');
-const stBroadcastStatus = $('stBroadcastStatus'), stViewerStatus = $('stViewerStatus');
-
-const stMirrorBtn = $('stMirrorBtn'), stCamBtn = $('stCamBtn'), stMicBtn = $('stMicBtn');
-const stFilterBtn = $('stFilterBtn'), stVoiceBtn = $('stVoiceBtn'), stPop = $('stPop');
-const stViewerMuteBtn = $('stViewerMuteBtn');
-const stMutedNote = $('stMutedNote'), stEnded = $('stEnded'), stHostMuted = $('stHostMuted');
+let sourceMode = 'camera'; // 'camera' | 'file'
+let chosenFile = null;
 
 let socket = null;
 let bc = null; // active broadcast
@@ -34,154 +42,121 @@ function setStatus(el, text, kind){
   el.className = 'stream-status' + (kind ? ' ' + kind : '');
 }
 
-/* ================= PAGE SWITCH ================= */
-function isLive(){ return !!(bc || vw); }
+// ---------------------------------------------------------------
+// Signaling cadangan untuk hosting statis (Vercel dll.).
+// Vercel tidak bisa menjalankan server Socket.IO, jadi kalau `io` tidak ada,
+// kita pakai PeerJS Cloud hanya sebagai "kurir" pesan signaling.
+// Objek ini meniru API socket.io (on / off / emit / id) dengan event yang SAMA
+// (join-room, join-as-viewer, viewer-joined, offer, answer, ice-candidate, leave-room),
+// jadi seluruh logika broadcaster & viewer di bawah tidak perlu diubah.
+// Media tetap dikirim langsung lewat WebRTC (RTCPeerConnection) seperti biasa.
+// ---------------------------------------------------------------
+function createPeerSignaling(){
+  const handlers = {};
+  const conns = {};            // peerId -> DataConnection
+  let peer = null;
+  let role = null;             // 'broadcaster' | 'viewer'
 
-function showPage(which){
-  if(which === 'booth' && isLive()){
-    setStatus(bc ? stBroadcastStatus : stViewerStatus,
-      bc ? 'end your broadcast first to go back to the booth.' : 'leave the stream first to go back to the booth.', 'warn');
-    return false;
+  const clean = obj => JSON.parse(JSON.stringify(obj));
+  const fire = (ev, data) => (handlers[ev] || []).slice().forEach(fn => fn(data));
+
+  function onMessage(from, m){
+    if(!m) return;
+    if(m.t === 'offer')  fire('offer', { sdp: m.sdp, broadcasterId: from });
+    if(m.t === 'answer') fire('answer', { sdp: m.sdp, viewerId: from });
+    if(m.t === 'ice')    fire('ice-candidate', { candidate: m.candidate, senderId: from });
   }
-  boothSec.style.display = which === 'booth' ? '' : 'none';
-  streamSec.style.display = which === 'stream' ? '' : 'none';
-  pageSwitch.dataset.page = which;
-  pageSwitch.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.page === which));
-  return true;
-}
 
-function lockUI(){
-  const live = isLive();
-  streamTabs.classList.toggle('locked', live);
-  pageSwitch.classList.toggle('locked', live);
-}
-
-pageSwitch.querySelectorAll('button').forEach(b => {
-  b.addEventListener('click', () => {
-    if(showPage(b.dataset.page)) $(b.dataset.page).scrollIntoView({ behavior: 'smooth' });
-  });
-});
-// nav links + hero button
-document.querySelectorAll('a[href="#booth"], a[href="#stream"]').forEach(a => {
-  a.addEventListener('click', e => {
-    e.preventDefault();
-    const target = a.getAttribute('href').slice(1);
-    if(showPage(target)) $(target).scrollIntoView({ behavior: 'smooth' });
-  });
-});
-
-function switchStreamTab(which){
-  const toViewer = which === 'viewer';
-  if(toViewer && bc){ setStatus(stBroadcastStatus, 'end your broadcast first to switch to Watch.', 'warn'); return; }
-  if(!toViewer && vw){ setStatus(stViewerStatus, 'leave the stream first to switch to Broadcast.', 'warn'); return; }
-  stTabBroadcast.classList.toggle('active', !toViewer);
-  stTabViewer.classList.toggle('active', toViewer);
-  stBroadcastPanel.style.display = toViewer ? 'none' : 'flex';
-  stViewerPanel.style.display = toViewer ? 'flex' : 'none';
-}
-
-/* ================= OVERLAY HELPERS ================= */
-function setCount(box, n){
-  box.querySelector('.vc').textContent = `${n} viewer${n === 1 ? '' : 's'}`;
-}
-function addChat(box, m){
-  const list = box.querySelector('.st-chat');
-  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
-  const el = document.createElement('div');
-  if(m.system){
-    el.className = 'st-msg sys';
-    el.textContent = m.text;
-  }else{
-    el.className = 'st-msg' + (m.host ? ' host' : '');
-    const b = document.createElement('b'); b.textContent = m.name;
-    const t = document.createElement('span'); t.textContent = ' ' + m.text;
-    el.append(b, t);
+  function trackConn(conn){
+    conn.on('data', m => onMessage(conn.peer, m));
+    conn.on('close', () => { delete conns[conn.peer]; });
+    conn.on('error', err => console.warn('peer connection error:', err));
   }
-  list.appendChild(el);
-  while(list.children.length > 300) list.firstChild.remove();
-  if(atBottom) list.scrollTop = list.scrollHeight; // stay pinned unless the user scrolled up
-}
-function clearOverlay(box){
-  box.querySelector('.st-chat').innerHTML = '';
-  setCount(box, 0);
-}
-function setLiveBox(box, on){ box.classList.toggle('live', on); }
 
-function wireChat(form, getSession){
-  form.addEventListener('submit', e => {
-    e.preventDefault();
-    const input = form.querySelector('input');
-    const text = input.value.trim();
-    const sess = getSession();
-    if(!text || !sess || !socket) return;
-    socket.emit('chat-message', { roomId: sess.roomId, text });
-    input.value = '';
-  });
-}
-wireChat($('stChatFormB'), () => bc);
-wireChat($('stChatFormV'), () => vw);
+  function closeAll(){
+    Object.values(conns).forEach(c => { try{ c.close(); }catch(e){} });
+    Object.keys(conns).forEach(k => delete conns[k]);
+    if(peer){ try{ peer.destroy(); }catch(e){} }
+    peer = null;
+    role = null;
+    api.id = null;
+  }
 
-function setRail(btn, icon, label, state){
-  btn.querySelector('i').className = 'fa-solid ' + icon;
-  btn.querySelector('span').textContent = label;
-  btn.classList.remove('on', 'off');
-  if(state) btn.classList.add(state);
+  const api = {
+    id: null,
+    on(ev, fn){ (handlers[ev] = handlers[ev] || []).push(fn); return api; },
+    off(ev, fn){ handlers[ev] = (handlers[ev] || []).filter(f => f !== fn); return api; },
+    emit(ev, payload){
+      if(ev === 'join-room'){
+        closeAll();
+        role = 'broadcaster';
+        peer = new Peer('blush-' + payload);
+        peer.on('open', id => { api.id = id; });
+        peer.on('connection', conn => {
+          trackConn(conn);
+          conn.on('open', () => {
+            conns[conn.peer] = conn;
+            fire('viewer-joined', { viewerId: conn.peer });
+          });
+        });
+        peer.on('error', err => console.warn('peer error:', err));
+      }
+      else if(ev === 'join-as-viewer'){
+        closeAll();
+        role = 'viewer';
+        peer = new Peer();
+        peer.on('open', id => {
+          api.id = id;
+          const conn = peer.connect('blush-' + payload, { serialization: 'json', reliable: true });
+          trackConn(conn);
+          conn.on('open', () => { conns[conn.peer] = conn; });
+        });
+        peer.on('error', err => console.warn('peer error:', err));
+      }
+      else if(ev === 'offer' || ev === 'answer'){
+        const c = conns[payload.target];
+        if(c && c.open) c.send({ t: ev, sdp: clean(payload.sdp) });
+      }
+      else if(ev === 'ice-candidate'){
+        const msg = { t: 'ice', candidate: clean(payload.candidate) };
+        Object.values(conns).forEach(c => { if(c.open) c.send(msg); });
+      }
+      else if(ev === 'leave-room'){
+        closeAll();
+      }
+      return api;
+    }
+  };
+  return api;
 }
 
-/* ================= SOCKET ================= */
 function getSocket(){
   if(socket) return socket;
-  if(typeof io === 'undefined') return null;
-  socket = io();
-
-  // warn when the node server is still the old version
-  let serverReady = false;
-  socket.on('server-ready', () => { serverReady = true; });
-  setTimeout(() => {
-    if(serverReady) return;
-    const msg = 'server is outdated — stop it (Ctrl+C) and run node server.js again.';
-    if(bc) setStatus(stBroadcastStatus, msg, 'warn');
-    else if(vw) setStatus(stViewerStatus, msg, 'warn');
-  }, 2500);
-
-  socket.on('viewer-count', ({ roomId, count }) => {
-    const sess = bc || vw;
-    if(!sess || sess.roomId !== roomId) return;
-    setCount(bc ? boxB : boxV, count);
-    if(bc) setStatus(stBroadcastStatus, count === 0 ? 'live — waiting for viewers…' : `live — ${count} viewer${count > 1 ? 's' : ''} watching`, 'on');
-  });
-  socket.on('chat-message', m => {
-    const sess = bc || vw;
-    if(!sess || sess.roomId !== m.roomId) return;
-    addChat(bc ? boxB : boxV, m);
-  });
-  socket.on('chat-history', ({ roomId, messages }) => {
-    if(!vw || vw.roomId !== roomId) return;
-    messages.forEach(m => addChat(boxV, m));
-  });
-    socket.on('host-mic', ({ roomId, muted }) => {
-    if(vw && vw.roomId === roomId) stHostMuted.hidden = !muted;
-  });
-  socket.on('stream-ended', ({ roomId }) => {
-    if(vw && vw.roomId === roomId){
-      leaveView();
-      stEnded.hidden = false; // overlay "live has ended"
-      setStatus(stViewerStatus, 'the live has ended.', 'warn');
-    }
-  });
-  socket.on('no-stream', () => {
-    if(vw){
-      leaveView();
-      setStatus(stViewerStatus, 'no live stream with that token.', 'warn');
-    }
-  });
-  return socket;
+  if(typeof io !== 'undefined'){            // server lokal (Node + Socket.IO) — cara asli
+    socket = io();
+    return socket;
+  }
+  if(typeof Peer !== 'undefined'){          // hosting statis (Vercel) — signaling via PeerJS
+    socket = createPeerSignaling();
+    return socket;
+  }
+  return null;
 }
 
+const NO_SERVER_MSG = 'stream server not reachable — open this page from the blush live server (https://<your-ip>:8080), or from the online link with internet access.';
+
+// ICE candidates can arrive before the remote description is set,
+// so hold them until it is.
 async function addCandidate(pc, candidate){
-  if(!pc.remoteDescription){ (pc._pending = pc._pending || []).push(candidate); return; }
-  try{ await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
-  catch(err){ console.warn('addIceCandidate failed:', err); }
+  if(!pc.remoteDescription){
+    (pc._pending = pc._pending || []).push(candidate);
+    return;
+  }
+  try{
+    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+  }catch(err){
+    console.warn('addIceCandidate failed:', err);
+  }
 }
 async function flushCandidates(pc){
   const list = pc._pending || [];
@@ -189,142 +164,77 @@ async function flushCandidates(pc){
   for(const c of list) await addCandidate(pc, c);
 }
 
-/* ================= BROADCAST PIPELINE =================
-   camera -> canvas (filter + mirror) -> captureStream  (video)
-   mic -> effect chain -> master gain (mute) -> destination (audio)
-   Viewers receive the processed stream, so effects are seen/heard live. */
-async function buildPipeline(raw, ac){
-  const W = 1280, H = 720;
-  const camVideo = document.createElement('video');
-  camVideo.muted = true; camVideo.playsInline = true; camVideo.srcObject = raw;
-  try{ await camVideo.play(); }catch(e){}
+function switchStreamTab(which){
+  const isBroadcast = which === 'broadcast';
+  stTabBroadcast.classList.toggle('active', isBroadcast);
+  stTabViewer.classList.toggle('active', !isBroadcast);
+  stBroadcastPanel.style.display = isBroadcast ? 'flex' : 'none';
+  stViewerPanel.style.display = isBroadcast ? 'none' : 'flex';
+}
 
-  const canvas = document.createElement('canvas');
-  canvas.width = W; canvas.height = H;
-  const cx = canvas.getContext('2d');
+function lockTabs(){
+  streamTabs.classList.toggle('locked', !!(bc || vw));
+}
 
-  const st = { mirror: false, camOn: true, micOn: true, filter: 'none', voice: 'none' };
-  let frozen = null; // blurred last frame, shown while the camera is off
-  const filterCss = () => (FILTERS.find(f => f.id === st.filter) || FILTERS[0]).css || 'none';
+// ===== MEDIA SOURCE =====
+// Returns { stream, cleanup }. Camera -> getUserMedia, file -> <video>.captureStream().
+async function getCameraSource(){
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  stLocalVideo.muted = true;
+  stLocalVideo.controls = false;
+  stLocalVideo.srcObject = stream;
+  return { stream, cleanup(){} };
+}
 
-  function draw(){
-    cx.save();
-    cx.filter = 'none';
-    cx.fillStyle = '#000';
-    cx.fillRect(0, 0, W, H);
-    if(st.camOn && camVideo.videoWidth){
-      const sc = Math.max(W / camVideo.videoWidth, H / camVideo.videoHeight); // cover: fill the whole frame
-      const dw = camVideo.videoWidth * sc, dh = camVideo.videoHeight * sc;
-      cx.filter = filterCss();
-      if(st.mirror){ cx.translate(W, 0); cx.scale(-1, 1); }
-      cx.drawImage(camVideo, (W - dw) / 2, (H - dh) / 2, dw, dh);
-    }else if(!st.camOn){
-      if(frozen){
-        cx.drawImage(frozen, 0, 0, W, H);
-      }else{
-        const g = cx.createLinearGradient(0, 0, W, H);
-        g.addColorStop(0, '#ffb3d1'); g.addColorStop(1, '#ff5fa2');
-        cx.fillStyle = g;
-        cx.fillRect(0, 0, W, H);
-      }
-      cx.fillStyle = 'rgba(255,255,255,0.18)';
-      cx.fillRect(0, 0, W, H);
-      cx.shadowColor = 'rgba(0,0,0,0.45)';
-      cx.shadowBlur = 14;
-      cx.fillStyle = '#fff';
-      cx.font = '600 40px Poppins, sans-serif';
-      cx.textAlign = 'center';
-      cx.textBaseline = 'middle';
-      cx.fillText('camera off ♡', W / 2, H / 2);
-    }
-    cx.restore();
-  }
+async function getFileSource(file){
+  const url = URL.createObjectURL(file);
+  stLocalVideo.srcObject = null;
+  stLocalVideo.src = url;
+  stLocalVideo.loop = stLoop.checked;
+  stLocalVideo.muted = false;      // the broadcaster can hear it; viewers get their own copy
+  stLocalVideo.controls = true;    // play / pause / seek — viewers follow
+  stLocalVideo.playsInline = true;
 
-  // take the last drawn frame and blur it (shrink + stretch, works in every browser)
-  function freezeFrame(){
-    frozen = null;
-    if(!camVideo.videoWidth) return;
-    try{
-      const tiny = document.createElement('canvas');
-      tiny.width = 64; tiny.height = 36;
-      const tcx = tiny.getContext('2d');
-      tcx.imageSmoothingEnabled = true; tcx.imageSmoothingQuality = 'high';
-      tcx.drawImage(canvas, 0, 0, 64, 36);
-      const big = document.createElement('canvas');
-      big.width = W; big.height = H;
-      const bcx = big.getContext('2d');
-      bcx.imageSmoothingEnabled = true; bcx.imageSmoothingQuality = 'high';
-      bcx.drawImage(tiny, 0, 0, W, H);
-      frozen = big;
-    }catch(e){ frozen = null; }
-  }
-  draw();
-  const timer = setInterval(draw, 1000 / 30); // interval (not rAF) so it keeps running in a background tab
+  // tracks only exist once the element is really playing
+  await new Promise((resolve, reject) => {
+    stLocalVideo.onplaying = resolve;
+    stLocalVideo.onerror = () => reject(new Error('cannot play this video file'));
+    stLocalVideo.play().catch(reject);
+  });
+  stLocalVideo.onplaying = null;
+  stLocalVideo.onerror = null;
 
-  // audio
-  const src = ac.createMediaStreamSource(new MediaStream(raw.getAudioTracks()));
-  const master = ac.createGain();
-  const dest = ac.createMediaStreamDestination();
-  master.connect(dest);
-  let chain = [];
-
-  function setVoice(id){
-    st.voice = id;
-    chain.forEach(n => { try{ n.disconnect(); }catch(e){} if(n.stop){ try{ n.stop(); }catch(e){} } });
-    chain = [];
-    src.disconnect();
-    let out = src;
-    if(id === 'robot'){
-      const osc = ac.createOscillator(); osc.type = 'sine'; osc.frequency.value = 45;
-      const ring = ac.createGain(); ring.gain.value = 0;
-      src.connect(ring); osc.connect(ring.gain); osc.start();
-      chain.push(osc, ring); out = ring;
-    }else if(id === 'echo'){
-      const delay = ac.createDelay(); delay.delayTime.value = 0.28;
-      const fb = ac.createGain(); fb.gain.value = 0.35;
-      const mix = ac.createGain();
-      src.connect(mix); src.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(mix);
-      chain.push(delay, fb, mix); out = mix;
-    }else if(id === 'deep'){
-      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 750;
-      const g = ac.createGain(); g.gain.value = 1.4;
-      src.connect(lp); lp.connect(g);
-      chain.push(lp, g); out = g;
-    }else if(id === 'radio'){
-      const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1600; bp.Q.value = 5;
-      const sh = ac.createWaveShaper(); sh.curve = makeDistortionCurve(12); sh.oversample = '4x';
-      src.connect(bp); bp.connect(sh);
-      chain.push(bp, sh); out = sh;
-    }
-    out.connect(master);
-  }
-  setVoice('none');
-
-  const outStream = new MediaStream([
-    ...canvas.captureStream(30).getVideoTracks(),
-    ...dest.stream.getAudioTracks()
-  ]);
+  const capture = stLocalVideo.captureStream || stLocalVideo.mozCaptureStream;
+  if(!capture) throw new Error('captureStream is not supported in this browser');
+  const stream = capture.call(stLocalVideo);
 
   return {
-    st, outStream, setVoice,
-    setCam(on){
-      if(!on && st.camOn) freezeFrame();
-      st.camOn = on;
-      raw.getVideoTracks().forEach(t => t.enabled = on);
-    },
-    setMic(on){ st.micOn = on; master.gain.value = on ? 1 : 0; },
-    destroy(){
-      clearInterval(timer);
-      raw.getTracks().forEach(t => t.stop());
-      camVideo.srcObject = null;
-      try{ ac.close(); }catch(e){}
+    stream,
+    cleanup(){
+      stLocalVideo.pause();
+      stLocalVideo.removeAttribute('src');
+      stLocalVideo.load();
+      stLocalVideo.controls = false;
+      stLocalVideo.muted = true;
+      URL.revokeObjectURL(url);
     }
   };
 }
 
-/* ================= BROADCASTER ================= */
+function setSourceMode(mode){
+  sourceMode = mode;
+  stSrcCam.classList.toggle('active', mode === 'camera');
+  stSrcFile.classList.toggle('active', mode === 'file');
+  stFileBlock.style.display = mode === 'file' ? 'flex' : 'none';
+  setStatus(stBroadcastStatus, mode === 'file'
+    ? 'choose a video file, then press start.'
+    : 'press start to turn on your camera and get a token.');
+}
+
+// ===== BROADCASTER =====
 async function startBroadcast(){
-  if(bc || vw) return;
+  if(bc) return;
+
   const s = getSocket();
   if(!s){ setStatus(stBroadcastStatus, NO_SERVER_MSG, 'warn'); return; }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
@@ -332,73 +242,74 @@ async function startBroadcast(){
     return;
   }
 
+  if(sourceMode === 'file' && !chosenFile){
+    setStatus(stBroadcastStatus, 'choose a video file first.', 'warn');
+    return;
+  }
+
   stStartBtn.disabled = true;
-  setStatus(stBroadcastStatus, 'asking for camera & mic…');
+  setStatus(stBroadcastStatus, sourceMode === 'file' ? 'loading your video…' : 'asking for camera & mic…');
 
-  const ac = new (window.AudioContext || window.webkitAudioContext)(); // created inside the click so audio isn't blocked
-  if(ac.resume) ac.resume();
-
-  let raw;
+  let source, localStream;
   try{
-    raw = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    source = sourceMode === 'file' ? await getFileSource(chosenFile) : await getCameraSource();
+    localStream = source.stream;
   }catch(err){
     console.error(err);
-    try{ ac.close(); }catch(e){}
-    let msg = 'could not open camera/mic — check the browser permission.';
-    if(err && err.name === 'NotAllowedError') msg = 'camera/mic blocked — click the lock icon next to the address bar, allow Camera & Microphone, then reload.';
-    else if(err && err.name === 'NotFoundError') msg = 'no camera or mic found on this device.';
-    else if(err && (err.name === 'NotReadableError' || err.name === 'AbortError')) msg = 'camera/mic is being used by another app or tab — close it and try again.';
-    setStatus(stBroadcastStatus, msg, 'warn');
+    setStatus(stBroadcastStatus, sourceMode === 'file'
+      ? 'could not play that file — try another video (mp4 / webm).'
+      : 'could not open camera/mic — check the browser permission.', 'warn');
     stStartBtn.disabled = false;
     return;
   }
-
-  let fx;
-  try{
-    fx = await buildPipeline(raw, ac);
-  }catch(err){
-    console.error(err);
-    raw.getTracks().forEach(t => t.stop());
-    try{ ac.close(); }catch(e){}
-    setStatus(stBroadcastStatus, 'something went wrong starting the stream — try again.', 'warn');
-    stStartBtn.disabled = false;
-    return;
-  }
-  const localStream = fx.outStream;
-  stLocalVideo.srcObject = localStream;
-  stLocalVideo.play().catch(() => {});
 
   const roomId = Math.random().toString(36).substring(2, 10);
   const peerConnections = {};
   stToken.textContent = roomId;
 
-  const onViewerJoined = async ({ viewerId, name }) => {
-    addChat(boxB, { system: true, text: `${name || 'someone'} joined live` });
-    if(peerConnections[viewerId]) peerConnections[viewerId].close();
+  function updateViewerCount(){
+    const n = Object.values(peerConnections).filter(pc => pc.connectionState === 'connected').length;
+    setStatus(stBroadcastStatus, n === 0 ? 'live — waiting for viewers…' : `live — ${n} viewer${n > 1 ? 's' : ''} watching`, 'on');
+  }
+
+  const onViewerJoined = async ({ viewerId }) => {
+    console.log(`Viewer ${viewerId} joined, creating connection...`);
     const pc = new RTCPeerConnection(ICE_CONFIG);
     peerConnections[viewerId] = pc;
+
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
     pc.onicecandidate = event => {
-      if(event.candidate) s.emit('ice-candidate', { roomId, candidate: event.candidate });
+      if(event.candidate){
+        s.emit('ice-candidate', { roomId, candidate: event.candidate });
+      }
     };
     pc.onconnectionstatechange = () => {
-      if(pc.connectionState === 'closed' || pc.connectionState === 'failed') delete peerConnections[viewerId];
+      if(pc.connectionState === 'closed' || pc.connectionState === 'failed'){
+        delete peerConnections[viewerId];
+      }
+      updateViewerCount();
     };
+
     try{
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       s.emit('offer', { target: viewerId, sdp: offer });
-    }catch(err){ console.error('offer failed:', err); }
+    }catch(err){
+      console.error('offer failed:', err);
+    }
   };
 
   const onAnswer = async ({ sdp, viewerId }) => {
+    console.log(`Got answer from ${viewerId}`);
     const pc = peerConnections[viewerId];
     if(!pc) return;
     try{
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
       await flushCandidates(pc);
-    }catch(err){ console.error('answer failed:', err); }
+    }catch(err){
+      console.error('answer failed:', err);
+    }
   };
 
   const onIce = ({ candidate, senderId }) => {
@@ -412,128 +323,74 @@ async function startBroadcast(){
   s.on('ice-candidate', onIce);
   s.emit('join-room', roomId);
 
-  bc = { roomId, fx, peerConnections, onViewerJoined, onAnswer, onIce };
+  bc = { roomId, localStream, source, peerConnections, onViewerJoined, onAnswer, onIce };
 
-  // reset controls
-  setRail(stMirrorBtn, 'fa-left-right', 'Mirror off');
-  setRail(stCamBtn, 'fa-video', 'Cam on', 'on');
-  setRail(stMicBtn, 'fa-microphone', 'Mic on', 'on');
-  closePop(); refreshChips();
-
-  setLiveBox(boxB, true);
-  clearOverlay(boxB);
   stStopBtn.style.display = '';
   stStartBtn.style.display = 'none';
-  lockUI();
-  setStatus(stBroadcastStatus, 'live — waiting for viewers…', 'on');
+  stSourceRow.classList.add('locked');
+  stFileBlock.classList.add('locked');
+  lockTabs();
+  updateViewerCount();
 }
 
 function stopBroadcast(){
   if(!bc) return;
-  if(socket){
-    socket.off('viewer-joined', bc.onViewerJoined);
-    socket.off('answer', bc.onAnswer);
-    socket.off('ice-candidate', bc.onIce);
-    socket.emit('leave-room', bc.roomId); // server tells viewers the stream ended
+  const s = getSocket();
+  if(s){
+    s.off('viewer-joined', bc.onViewerJoined);
+    s.off('answer', bc.onAnswer);
+    s.off('ice-candidate', bc.onIce);
+    s.emit('leave-room', bc.roomId);
   }
   Object.values(bc.peerConnections).forEach(pc => { pc.onconnectionstatechange = null; pc.close(); });
-  bc.fx.destroy();
+  bc.localStream.getTracks().forEach(t => t.stop());
+  bc.source.cleanup();
   stLocalVideo.srcObject = null;
   bc = null;
+  stSourceRow.classList.remove('locked');
+  stFileBlock.classList.remove('locked');
 
-  closePop();
-  setLiveBox(boxB, false);
-  clearOverlay(boxB);
   stToken.textContent = TOKEN_PLACEHOLDER;
   stStopBtn.style.display = 'none';
   stStartBtn.style.display = '';
   stStartBtn.disabled = false;
-  lockUI();
-  setStatus(stBroadcastStatus, 'broadcast ended.');
+  lockTabs();
+  setStatus(stBroadcastStatus, 'broadcast stopped.');
 }
 
-/* ---- broadcaster controls (right rail) ---- */
-stMirrorBtn.onclick = () => {
-  if(!bc) return;
-  const on = !bc.fx.st.mirror;
-  bc.fx.st.mirror = on;
-  setRail(stMirrorBtn, 'fa-left-right', on ? 'Mirror on' : 'Mirror off', on ? 'on' : '');
-};
-stCamBtn.onclick = () => {
-  if(!bc) return;
-  const on = !bc.fx.st.camOn;
-  bc.fx.setCam(on);
-  setRail(stCamBtn, on ? 'fa-video' : 'fa-video-slash', on ? 'Cam on' : 'Cam off', on ? 'on' : 'off');
-};
-stMicBtn.onclick = () => {
-  if(!bc) return;
-  const on = !bc.fx.st.micOn;
-  bc.fx.setMic(on);
-  if(socket) socket.emit('host-mic', { roomId: bc.roomId, muted: !on }); // tell viewers
-  setRail(stMicBtn, on ? 'fa-microphone' : 'fa-microphone-slash', on ? 'Mic on' : 'Muted', on ? 'on' : 'off');
-};
+// ===== VIEWER =====
+function startView(roomId){
+  if(vw) return;
 
-// filter / voice popover
-let popKind = null;
-function closePop(){ popKind = null; stPop.hidden = true; stPop.innerHTML = ''; }
-function refreshChips(){
-  stPop.querySelectorAll('.filter-chip').forEach(c => {
-    const cur = popKind === 'filter' ? (bc && bc.fx.st.filter) : (bc && bc.fx.st.voice);
-    c.classList.toggle('active', c.dataset.id === cur);
-  });
-}
-function openPop(kind){
-  if(!bc) return;
-  if(popKind === kind){ closePop(); return; }
-  popKind = kind;
-  stPop.innerHTML = '';
-  const items = kind === 'filter' ? FILTERS.map(f => [f.id, f.label]) : VOICES;
-  items.forEach(([id, label]) => {
-    const chip = document.createElement('button');
-    chip.className = 'filter-chip';
-    chip.dataset.id = id;
-    chip.textContent = label;
-    chip.onclick = () => {
-      if(!bc) return;
-      if(kind === 'filter') bc.fx.st.filter = id; else bc.fx.setVoice(id);
-      refreshChips();
-    };
-    stPop.appendChild(chip);
-  });
-  stPop.hidden = false;
-  refreshChips();
-}
-stFilterBtn.onclick = () => openPop('filter');
-stVoiceBtn.onclick = () => openPop('voice');
-
-/* ================= VIEWER ================= */
-function startView(roomId, name){
-  if(vw || bc) return;
   const s = getSocket();
   if(!s){ setStatus(stViewerStatus, NO_SERVER_MSG, 'warn'); return; }
 
   const session = { roomId, pc: null, waitTimer: null };
 
   const onOffer = async ({ sdp, broadcasterId }) => {
+    console.log('Got offer from broadcaster');
     clearTimeout(session.waitTimer);
     if(session.pc) session.pc.close();
+
     const pc = new RTCPeerConnection(ICE_CONFIG);
     session.pc = pc;
 
     pc.ontrack = event => {
       if(stRemoteVideo.srcObject !== event.streams[0]){
         stRemoteVideo.srcObject = event.streams[0];
-        stRemoteVideo.play().catch(() => { stRemoteVideo.muted = true; syncViewerMute(); }); // sound blocked by browser -> start muted
       }
     };
     pc.onicecandidate = event => {
-      if(event.candidate) s.emit('ice-candidate', { roomId, candidate: event.candidate });
+      if(event.candidate){
+        s.emit('ice-candidate', { roomId, candidate: event.candidate });
+      }
     };
     pc.onconnectionstatechange = () => {
       if(pc.connectionState === 'connected') setStatus(stViewerStatus, 'connected — enjoy the stream ♡', 'on');
       else if(pc.connectionState === 'connecting') setStatus(stViewerStatus, 'connecting…');
       else if(pc.connectionState === 'disconnected' || pc.connectionState === 'failed') setStatus(stViewerStatus, 'connection lost.', 'warn');
     };
+
     try{
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
       await flushCandidates(pc);
@@ -545,13 +402,14 @@ function startView(roomId, name){
       setStatus(stViewerStatus, 'could not connect to the broadcaster.', 'warn');
     }
   };
+
   const onIce = ({ candidate, senderId }) => {
     if(session.pc && senderId !== s.id) addCandidate(session.pc, candidate);
   };
 
   s.on('offer', onOffer);
   s.on('ice-candidate', onIce);
-  s.emit('join-as-viewer', { roomId, name });
+  s.emit('join-as-viewer', roomId);
 
   session.onOffer = onOffer;
   session.onIce = onIce;
@@ -560,83 +418,73 @@ function startView(roomId, name){
   }, 8000);
   vw = session;
 
-  stEnded.hidden = true;
-  stHostMuted.hidden = true;
-  stRemoteVideo.muted = false; // join is a click, so sound is normally allowed
-  syncViewerMute();
-
-  setLiveBox(boxV, true);
-  clearOverlay(boxV);
-  stHostMuted.hidden = true;
   stJoinBtn.style.display = 'none';
   stLeaveBtn.style.display = '';
   stTokenInput.disabled = true;
-  stNameInput.disabled = true;
-  lockUI();
+  lockTabs();
   setStatus(stViewerStatus, 'joined — waiting for the broadcaster…');
 }
 
 function leaveView(){
   if(!vw) return;
+  const s = getSocket();
   clearTimeout(vw.waitTimer);
-  if(socket){
-    socket.off('offer', vw.onOffer);
-    socket.off('ice-candidate', vw.onIce);
-    socket.emit('leave-room', vw.roomId);
+  if(s){
+    s.off('offer', vw.onOffer);
+    s.off('ice-candidate', vw.onIce);
+    s.emit('leave-room', vw.roomId);
   }
   if(vw.pc){ vw.pc.onconnectionstatechange = null; vw.pc.close(); }
   stRemoteVideo.srcObject = null;
   vw = null;
 
-  setLiveBox(boxV, false);
-  clearOverlay(boxV);
-  stHostMuted.hidden = true;
   stJoinBtn.style.display = '';
   stLeaveBtn.style.display = 'none';
   stTokenInput.disabled = false;
-  stNameInput.disabled = false;
-  lockUI();
+  lockTabs();
   setStatus(stViewerStatus, 'left the stream.');
 }
 
-function syncViewerMute(){
-  const m = stRemoteVideo.muted;
-  stMutedNote.hidden = !m;
-  setRail(stViewerMuteBtn, m ? 'fa-volume-xmark' : 'fa-volume-high', m ? 'Muted' : 'Sound on', m ? 'off' : 'on');
-}
-stViewerMuteBtn.onclick = () => { stRemoteVideo.muted = !stRemoteVideo.muted; syncViewerMute(); };
-
-/* ================= UI wiring ================= */
+// ===== UI wiring =====
 stTabBroadcast.onclick = () => switchStreamTab('broadcast');
 stTabViewer.onclick = () => switchStreamTab('viewer');
+
+stSrcCam.onclick = () => { if(!bc) setSourceMode('camera'); };
+stSrcFile.onclick = () => { if(!bc) setSourceMode('file'); };
+stFileInput.onchange = () => {
+  const f = stFileInput.files && stFileInput.files[0];
+  if(!f) return;
+  if(!f.type.startsWith('video/')){
+    setStatus(stBroadcastStatus, 'that is not a video file.', 'warn');
+    stFileInput.value = '';
+    return;
+  }
+  chosenFile = f;
+  stFileName.textContent = f.name;
+  setStatus(stBroadcastStatus, 'ready — press start to go live with this video.');
+};
+stLoop.onchange = () => { stLocalVideo.loop = stLoop.checked; };
+
 stStartBtn.onclick = startBroadcast;
 stStopBtn.onclick = stopBroadcast;
 
 stToken.onclick = () => {
   if(!bc) return;
+  const done = () => setStatus(stBroadcastStatus, 'token copied!', 'on');
   if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(bc.roomId).then(() => setStatus(stBroadcastStatus, 'token copied!', 'on')).catch(() => {});
+    navigator.clipboard.writeText(bc.roomId).then(done).catch(() => {});
   }
 };
 
 function joinFromInput(){
-  const name = stNameInput.value.trim().slice(0, 20);
   const roomId = stTokenInput.value.trim();
-  if(!name){ setStatus(stViewerStatus, 'enter your name first.', 'warn'); stNameInput.focus(); return; }
-  if(!roomId){ setStatus(stViewerStatus, 'enter a token first.', 'warn'); stTokenInput.focus(); return; }
-  try{ localStorage.setItem('blushlive-name', name); }catch(e){}
-  startView(roomId, name);
+  if(!roomId){ setStatus(stViewerStatus, 'enter a token first.', 'warn'); return; }
+  startView(roomId);
 }
 stJoinBtn.onclick = joinFromInput;
 stLeaveBtn.onclick = leaveView;
 stTokenInput.addEventListener('keydown', e => { if(e.key === 'Enter') joinFromInput(); });
-stNameInput.addEventListener('keydown', e => { if(e.key === 'Enter') joinFromInput(); });
-try{ stNameInput.value = localStorage.getItem('blushlive-name') || ''; }catch(e){}
-
-window.addEventListener('beforeunload', () => { if(bc) stopBroadcast(); });
 
 stToken.textContent = TOKEN_PLACEHOLDER;
 switchStreamTab('broadcast');
-syncViewerMute();
-showPage(location.hash === '#stream' ? 'stream' : 'booth');
 })();

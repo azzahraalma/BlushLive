@@ -1,0 +1,6 @@
+{
+  "framework": null,
+  "buildCommand": "mkdir -p dist && cp index.html script.js stream.js style.css dist/",
+  "outputDirectory": "dist",
+  "installCommand": "echo skip"
+}
