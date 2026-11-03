@@ -218,6 +218,7 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
       <div class="filter-row stream-source-row" id="stSourceRow">
         <button type="button" class="filter-chip active" id="stSrcCam"><i class="fa-solid fa-video"></i> Camera</button>
         <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Video file</button>
+        <button type="button" class="filter-chip" id="stSrcScreen"><i class="fa-solid fa-display"></i> Share screen</button>
       </div>
       <div class="stream-file" id="stFileBlock" style="display:none;">
         <label class="btn outline" for="stFileInput"><i class="fa-solid fa-folder-open"></i> Choose video</label>
@@ -256,8 +257,6 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
 
 <script src="script.js"></script>
 <script src="/socket.io/socket.io.js"></script>
-<!-- PeerJS: dipakai otomatis kalau tidak ada server Socket.IO (mis. saat di-host di Vercel) -->
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="stream.js"></script>
 </body>
 </html>
