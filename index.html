@@ -228,16 +228,43 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
 
       <div class="filter-row stream-source-row" id="stSourceRow">
         <button type="button" class="filter-chip active" id="stSrcCam"><i class="fa-solid fa-video"></i> Camera</button>
-        <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Video file</button>
         <button type="button" class="filter-chip" id="stSrcScreen"><i class="fa-solid fa-display"></i> Share screen</button>
-        <!-- EDIT 3: sumber ke-4 -->
-        <button type="button" class="filter-chip" id="stSrcScreenCam"><i class="fa-solid fa-user-group"></i> Screen + cam</button>
+        <button type="button" class="filter-chip" id="stSrcFile"><i class="fa-solid fa-file-video"></i> Share media</button>
       </div>
       <div class="stream-file" id="stFileBlock" style="display:none;">
-        <label class="btn outline" for="stFileInput"><i class="fa-solid fa-folder-open"></i> Choose video</label>
+        <label class="btn outline" for="stFileInput" id="stFileChoose"><i class="fa-solid fa-folder-open"></i> Choose video</label>
         <input type="file" id="stFileInput" accept="video/*" hidden>
         <span class="stream-filename" id="stFileName">no file chosen</span>
         <label class="stream-loop"><input type="checkbox" id="stLoop" checked> loop</label>
+        <button type="button" class="btn outline" id="stFilePlayBtn" style="display:none;"><i class="fa-solid fa-pause"></i> <span class="txt">Pause</span></button>
+      </div>
+
+      <div class="stream-tools">
+        <div class="stream-ctrl-row">
+          <button type="button" class="btn outline" id="stCamBtn" style="display:none;"><i class="fa-solid fa-video-slash"></i> <span class="txt">Cam off</span></button>
+          <button type="button" class="btn outline" id="stMuteBtn"><i class="fa-solid fa-microphone"></i> <span class="txt">Mute audio</span></button>
+        </div>
+
+        <h3 class="mini-label">Ratio</h3>
+        <div class="filter-row" id="stRatioRow">
+          <button type="button" class="filter-chip active" data-ratio="16:9">16:9</button>
+          <button type="button" class="filter-chip" data-ratio="9:16">9:16</button>
+          <button type="button" class="filter-chip" data-ratio="3:4">3:4</button>
+        </div>
+
+        <div id="stFilterBlock">
+          <h3 class="mini-label">Filter</h3>
+          <div class="filter-row" id="stFilterRow"></div>
+        </div>
+
+        <h3 class="mini-label">Audio effect <span class="tiny">(your mic)</span></h3>
+        <select id="stFxSelect" class="effect-select">
+          <option value="none">Original Voice</option>
+          <option value="robot">Robot</option>
+          <option value="echo">Echo</option>
+          <option value="deep">Deep</option>
+          <option value="radio">Radio</option>
+        </select>
       </div>
 
       <h3 class="mini-label">Token (give it to your viewers)</h3>
@@ -246,7 +273,7 @@ make a lil’ video with your voice or pose for a photostrip or your audio even 
         <button class="btn" id="stStartBtn"><i class="fa-solid fa-tower-broadcast"></i> Start Broadcast</button>
         <button class="btn outline" id="stStopBtn" style="display:none;"><i class="fa-solid fa-stop"></i> Stop Broadcast</button>
       </div>
-      <p class="stream-status" id="stBroadcastStatus">pick a source (camera or video file), then press start to get a token.</p>
+      <p class="stream-status" id="stBroadcastStatus">pick a source (camera, share screen, or share media), then press start to get a token.</p>
     </div>
 
     <div class="stream-panel" id="stViewerPanel" style="display:none;">

@@ -21,6 +21,26 @@ const PEERJS_CDNS = [
   'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js'
 ];
 
+// ukuran video hasil kompositing untuk tiap rasio
+const RATIOS = {
+  '16:9': { w: 1280, h: 720 },
+  '9:16': { w: 720,  h: 1280 },
+  '3:4':  { w: 720,  h: 960 }
+};
+
+// filter (dipakai lewat ctx.filter di canvas; Safari belum support)
+const FILTERS = [
+  { id: 'none',  label: 'Normal', css: 'none' },
+  { id: 'blush', label: 'Blush',  css: 'sepia(0.25) saturate(1.5) hue-rotate(310deg) brightness(1.08)' },
+  { id: 'warm',  label: 'Warm',   css: 'sepia(0.35) saturate(1.3) hue-rotate(-10deg) brightness(1.05)' },
+  { id: 'cool',  label: 'Cool',   css: 'saturate(1.1) hue-rotate(15deg) brightness(1.05) contrast(1.05)' },
+  { id: 'vivid', label: 'Vivid',  css: 'saturate(1.6) contrast(1.1)' },
+  { id: 'soft',  label: 'Soft',   css: 'brightness(1.1) contrast(0.9) saturate(1.1)' },
+  { id: 'sepia', label: 'Sepia',  css: 'sepia(0.9)' },
+  { id: 'bw',    label: 'B&W',    css: 'grayscale(1)' }
+];
+const FILTER_OK = (typeof CanvasRenderingContext2D !== 'undefined') && ('filter' in CanvasRenderingContext2D.prototype);
+
 const streamTabs = document.getElementById('streamTabs');
 const stTabBroadcast = document.getElementById('stTabBroadcast');
 const stTabViewer = document.getElementById('stTabViewer');
@@ -40,18 +60,29 @@ const stViewerStatus = document.getElementById('stViewerStatus');
 
 const stSrcCam = document.getElementById('stSrcCam');
 const stSrcFile = document.getElementById('stSrcFile');
-const stSrcScreen = document.getElementById('stSrcScreen');   // opsional (tombol share screen)
-const stSrcScreenCam = document.getElementById('stSrcScreenCam'); // opsional (share screen + kamera kecil)
+const stSrcScreen = document.getElementById('stSrcScreen');
 const stSourceRow = document.getElementById('stSourceRow');
 const stFileBlock = document.getElementById('stFileBlock');
+const stFileChoose = document.getElementById('stFileChoose');
 const stFileInput = document.getElementById('stFileInput');
 const stFileName = document.getElementById('stFileName');
 const stLoop = document.getElementById('stLoop');
+const stFilePlayBtn = document.getElementById('stFilePlayBtn');
+
+const stCamBtn = document.getElementById('stCamBtn');
+const stMuteBtn = document.getElementById('stMuteBtn');
+const stRatioRow = document.getElementById('stRatioRow');
+const stFilterBlock = document.getElementById('stFilterBlock');
+const stFilterRow = document.getElementById('stFilterRow');
+const stFxSelect = document.getElementById('stFxSelect');
 
 const TOKEN_PLACEHOLDER = '— — — —';
 
-let sourceMode = 'camera'; // 'camera' | 'file' | 'screen' | 'screencam'
+let sourceMode = 'camera'; // 'camera' | 'file' | 'screen'
 let chosenFile = null;
+
+// pengaturan yang dipilih user (dipakai sebelum start dan bisa diubah saat live)
+const settings = { ratio: '16:9', filter: 'none', fx: 'none', muted: false, cam: false };
 
 let socket = null;
 let bc = null; // active broadcast
@@ -60,6 +91,14 @@ let vw = null; // active viewer session
 function setStatus(el, text, kind){
   el.textContent = text;
   el.className = 'stream-status' + (kind ? ' ' + kind : '');
+}
+
+// atur bentuk kotak video mengikuti rasio (16:9 lebar penuh, 9:16 / 3:4 lebih sempit)
+function fitBox(video, w, h){
+  const box = video && video.parentElement;
+  if(!box || !w || !h) return;
+  box.style.aspectRatio = w + ' / ' + h;
+  box.style.width = h > w ? 'min(100%, ' + Math.round(600 * w / h) + 'px)' : '100%';
 }
 
 // ---------------------------------------------------------------
@@ -91,13 +130,10 @@ async function loadPeerJS(){
 }
 
 // ---------------------------------------------------------------
-// Signaling cadangan untuk hosting statis (Vercel dll.).
-// Vercel tidak bisa menjalankan server Socket.IO, jadi kalau `io` tidak ada,
-// kita pakai PeerJS Cloud hanya sebagai "kurir" pesan signaling.
+// Signaling lewat PeerJS Cloud (hanya sebagai "kurir" pesan signaling).
 // Objek ini meniru API socket.io (on / off / emit / id) dengan event yang SAMA
-// (join-room, join-as-viewer, viewer-joined, offer, answer, ice-candidate, leave-room),
-// jadi logika broadcaster & viewer di bawah sama persis untuk kedua mode.
-// Media tetap dikirim langsung lewat WebRTC (RTCPeerConnection) seperti biasa.
+// (join-room, join-as-viewer, viewer-joined, offer, answer, ice-candidate, leave-room).
+// Media tetap dikirim langsung lewat WebRTC (RTCPeerConnection).
 // ---------------------------------------------------------------
 function createPeerSignaling(){
   const handlers = {};
@@ -155,7 +191,7 @@ function createPeerSignaling(){
         closeAll();
         role = 'broadcaster';
         peer = new Peer('blush-' + payload, { config: ICE_CONFIG });
-        peer.on('open', id => { api.id = id; fire('signal-ready', {}); });
+        peer.on('open', id => { api.id = id; console.log('[stream] broadcaster ready:', id); fire('signal-ready', {}); });
         peer.on('connection', conn => {
           trackConn(conn);
           conn.on('open', () => {
@@ -172,9 +208,10 @@ function createPeerSignaling(){
         peer = new Peer({ config: ICE_CONFIG });
         peer.on('open', id => {
           api.id = id;
+          console.log('[stream] viewer connecting to blush-' + roomId);
           const conn = peer.connect('blush-' + roomId, { serialization: 'json', reliable: true });
           trackConn(conn);
-          conn.on('open', () => { conns[conn.peer] = conn; });
+          conn.on('open', () => { conns[conn.peer] = conn; console.log('[stream] connected to broadcaster'); });
         });
         peer.on('error', onPeerError);
       }
@@ -183,7 +220,7 @@ function createPeerSignaling(){
         if(c && c.open) c.send({ t: ev, sdp: clean(payload.sdp) });
       }
       else if(ev === 'ice-candidate'){
-        // FIX: kirim ke target tertentu saja (bukan ke semua koneksi)
+        // kirim ke target tertentu saja (bukan ke semua koneksi)
         const msg = { t: 'ice', candidate: clean(payload.candidate) };
         if(payload.target){
           const c = conns[payload.target];
@@ -213,21 +250,23 @@ function createPeerSignaling(){
 
 // ---------------------------------------------------------------
 // Pilih mode signaling:
-//  - ada `io`  -> server lokal (Node + Socket.IO) = cara asli
-//  - tidak ada -> hosting statis (Vercel) = PeerJS
+//  - PeerJS dulu  -> token yang sama jalan di localhost MAUPUN di Vercel
+//                    (sebelumnya localhost pakai Socket.IO dan Vercel pakai PeerJS,
+//                     jadi broadcaster & viewer di dua tempat berbeda tidak ketemu)
+//  - kalau PeerJS tidak bisa dimuat (mis. LAN tanpa internet) -> cadangan Socket.IO
 // ---------------------------------------------------------------
 let signalingReady = null;
 function prepareSignaling(){
   if(signalingReady) return signalingReady;
   signalingReady = (async () => {
-    if(typeof io !== 'undefined'){
-      socket = io();
-      socket.isPeer = false;
-      return socket;
-    }
     const ok = await loadPeerJS();
     if(ok){
       socket = createPeerSignaling();
+      return socket;
+    }
+    if(typeof io !== 'undefined'){
+      socket = io();
+      socket.isPeer = false;
       return socket;
     }
     return null;
@@ -235,7 +274,7 @@ function prepareSignaling(){
   return signalingReady;
 }
 
-const NO_SERVER_MSG = 'stream server not reachable — open this page from the blush live server (https://<your-ip>:8080), or check your internet connection (the online version needs it to load PeerJS).';
+const NO_SERVER_MSG = 'stream server not reachable — check your internet connection (PeerJS could not be loaded), or open this page from the blush live server.';
 
 // ICE candidates can arrive before the remote description is set,
 // so hold them until it is.
@@ -268,130 +307,261 @@ function lockTabs(){
   streamTabs.classList.toggle('locked', !!(bc || vw));
 }
 
-// tunggu sampai stream punya minimal 1 track (kadang telat sedikit di beberapa browser)
-function waitForTracks(stream, ms){
+// ===== MEDIA SOURCE =====
+// Semua sumber (kamera / share screen / video file) digambar ke <canvas>, jadi
+// rasio, filter, dan bubble kamera ikut terkirim ke viewer. Audio lewat Web Audio
+// (mute + voice effect). Return { stream, cleanup, endedTrack, fileEl, warning, ctl }.
+function waitForVideos(list, ms){
   return new Promise(resolve => {
-    if(stream.getTracks().length > 0){ resolve(); return; }
-    const done = () => { clearTimeout(t); stream.removeEventListener('addtrack', done); resolve(); };
-    const t = setTimeout(done, ms || 2500);
-    stream.addEventListener('addtrack', done);
+    const t0 = Date.now();
+    (function check(){
+      if(list.every(v => v.videoWidth) || Date.now() - t0 > (ms || 3000)) resolve();
+      else setTimeout(check, 50);
+    })();
   });
 }
 
-// ===== MEDIA SOURCE =====
-// Return { stream, cleanup, endedTrack? }.
-// camera -> getUserMedia, file -> <video>.captureStream(), screen -> getDisplayMedia,
-// screencam -> layar + kamera bulat kecil (digabung lewat <canvas>).
-async function getCameraSource(){
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  stLocalVideo.srcObject = stream;
-  stLocalVideo.muted = true;
-  stLocalVideo.controls = false;
-  return { stream, cleanup(){} };
-}
+async function createSource(mode, file){
+  const hasDisplay = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  if(mode === 'screen' && !hasDisplay) throw new Error('screen share is not supported in this browser');
 
-async function getScreenSource(){
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
-    throw new Error('screen share is not supported in this browser');
-  }
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-  stLocalVideo.srcObject = stream;
-  stLocalVideo.muted = true;       // preview dibisukan supaya tidak echo
-  stLocalVideo.controls = false;
-  return { stream, cleanup(){}, endedTrack: stream.getVideoTracks()[0] };
-}
-
-// Share screen + kamera kecil (bulat) di pojok kanan bawah, digabung jadi 1 video lewat <canvas>.
-// Audio (mic + suara tab/layar) dicampur jadi 1 track.
-async function getScreenCamSource(){
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
-    throw new Error('screen share is not supported in this browser');
-  }
-  // AudioContext dibuat di awal (masih dalam klik user) supaya tidak "suspended"
+  // ---- audio graph ----
   const AC = window.AudioContext || window.webkitAudioContext;
-  const ac = new AC();
+  const ac = new AC();                       // dibuat di awal (masih dalam klik user) supaya tidak "suspended"
   try{ ac.resume(); }catch(e){}
+  const dest = ac.createMediaStreamDestination();
+  const master = ac.createGain();            // tombol mute
+  const mediaGain = ac.createGain();         // suara layar / file
+  const micGain = ac.createGain();           // suara mic (setelah voice effect)
+  const fxIn = ac.createGain();              // pintu masuk mic ke voice effect
+  master.gain.value = settings.muted ? 0 : 1;
+  mediaGain.connect(master);
+  micGain.connect(master);
+  master.connect(dest);
 
-  let screen = null, cam = null;
-  const stopRaw = () => {
-    [screen, cam].forEach(st => st && st.getTracks().forEach(t => t.stop()));
-    try{ ac.close(); }catch(e){}
+  let fxNodes = [], oscs = [];
+  function setFx(name){
+    try{ fxIn.disconnect(); }catch(e){}
+    oscs.forEach(o => { try{ o.stop(); }catch(e){} });
+    fxNodes.forEach(n => { try{ n.disconnect(); }catch(e){} });
+    oscs = []; fxNodes = [];
+
+    if(name === 'echo'){
+      const delay = ac.createDelay(1); delay.delayTime.value = 0.28;
+      const fb = ac.createGain(); fb.gain.value = 0.4;
+      const wet = ac.createGain(); wet.gain.value = 0.6;
+      fxIn.connect(micGain);
+      fxIn.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(wet); wet.connect(micGain);
+      fxNodes.push(delay, fb, wet);
+    }else if(name === 'robot'){
+      const ring = ac.createGain(); ring.gain.value = 0;
+      const osc = ac.createOscillator(); osc.type = 'sine'; osc.frequency.value = 55;
+      osc.connect(ring.gain); osc.start();
+      fxIn.connect(ring); ring.connect(micGain);
+      fxNodes.push(ring); oscs.push(osc);
+    }else if(name === 'deep'){
+      // suara dibuat lebih "berat" (bass naik, treble turun) — bukan pitch shift asli
+      const low = ac.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 220; low.gain.value = 12;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
+      const g = ac.createGain(); g.gain.value = 0.9;
+      fxIn.connect(low); low.connect(lp); lp.connect(g); g.connect(micGain);
+      fxNodes.push(low, lp, g);
+    }else if(name === 'radio'){
+      const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 450;
+      const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
+      const shaper = ac.createWaveShaper();
+      const k = 20, n = 256, curve = new Float32Array(n);
+      for(let i = 0; i < n; i++){
+        const x = i * 2 / n - 1;
+        curve[i] = (3 + k) * x * 20 * Math.PI / 180 / (Math.PI + k * Math.abs(x));
+      }
+      shaper.curve = curve;
+      fxIn.connect(hp); hp.connect(lp); lp.connect(shaper); shaper.connect(micGain);
+      fxNodes.push(hp, lp, shaper);
+    }else{
+      fxIn.connect(micGain);
+    }
+  }
+  setFx(settings.fx);
+
+  const addMic = stream => {
+    if(stream && stream.getAudioTracks().length){
+      ac.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(fxIn);
+    }
   };
 
-  try{
-    screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
-  }catch(err){
-    stopRaw();
-    throw err;
-  }
-
-  const makeVideo = tracks => {
+  // ---- video elements (tidak dipasang di halaman) ----
+  const makeVideo = () => {
     const v = document.createElement('video');
     v.muted = true;
     v.playsInline = true;
-    v.srcObject = new MediaStream(tracks);
     return v;
   };
-  const sv = makeVideo(screen.getVideoTracks());
-  const cv = makeVideo(cam.getVideoTracks());
+  const camV = makeVideo();
+  let baseV = makeVideo();
+
+  const raw = [];                 // semua MediaStream mentah, dihentikan saat cleanup
+  let camStream = null, camOn = false;
+  let screenStream = null, fileEl = null, fileUrl = null;
+  let worker = null, fallbackTimer = null;
+  let warning = '';
+
+  const cleanup = () => {
+    if(worker){ try{ worker.terminate(); }catch(e){} worker = null; }
+    if(fallbackTimer){ clearInterval(fallbackTimer); fallbackTimer = null; }
+    oscs.forEach(o => { try{ o.stop(); }catch(e){} });
+    camV.srcObject = null;
+    baseV.srcObject = null;
+    if(fileEl){
+      fileEl.onended = null;
+      fileEl.pause();
+      fileEl.removeAttribute('src');
+      fileEl.load();
+    }
+    if(fileUrl){ URL.revokeObjectURL(fileUrl); fileUrl = null; }
+    raw.forEach(st => st.getTracks().forEach(t => t.stop()));
+    if(camStream) camStream.getTracks().forEach(t => t.stop());
+    try{ ac.close(); }catch(e){}
+  };
+
+  // nyalakan / matikan bubble kamera (untuk mode screen & file)
+  async function setCam(on){
+    if(mode === 'camera') return true;     // mode kamera: kamera selalu nyala
+    if(on){
+      if(camOn) return true;
+      const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      camStream = s;
+      camV.srcObject = s;
+      try{ await camV.play(); }catch(e){}
+      camOn = true;
+      return true;
+    }
+    camOn = false;
+    if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+    camV.srcObject = null;
+    return false;
+  }
+
   try{
-    await Promise.all([sv.play(), cv.play()]);
-    await new Promise(resolve => {
-      const t0 = Date.now();
-      (function check(){
-        if((sv.videoWidth && cv.videoWidth) || Date.now() - t0 > 3000) resolve();
-        else setTimeout(check, 50);
-      })();
-    });
+    if(mode === 'camera'){
+      const s = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true });
+      camStream = s;
+      camOn = true;
+      camV.srcObject = new MediaStream(s.getVideoTracks());
+      addMic(s);
+      await camV.play();
+      await waitForVideos([camV]);
+    }else if(mode === 'screen'){
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      raw.push(screenStream);
+      baseV.srcObject = new MediaStream(screenStream.getVideoTracks());
+      if(screenStream.getAudioTracks().length){
+        ac.createMediaStreamSource(new MediaStream(screenStream.getAudioTracks())).connect(mediaGain);
+      }
+      try{
+        const m = await navigator.mediaDevices.getUserMedia({ audio: true });
+        raw.push(m);
+        addMic(m);
+      }catch(e){
+        warning = 'mic permission denied — streaming without your voice.';
+      }
+      await baseV.play();
+      await waitForVideos([baseV]);
+    }else{
+      fileUrl = URL.createObjectURL(file);
+      fileEl = makeVideo();
+      fileEl.muted = false;                  // audio lewat Web Audio, bukan lewat elemen
+      fileEl.loop = stLoop.checked;
+      fileEl.src = fileUrl;
+      const msrc = ac.createMediaElementSource(fileEl);
+      msrc.connect(mediaGain);               // ke viewer
+      msrc.connect(ac.destination);          // streamer ikut dengar
+      baseV = fileEl;
+      await fileEl.play();
+      await waitForVideos([fileEl]);
+    }
+
+    if(mode !== 'camera' && settings.cam){
+      try{ await setCam(true); }
+      catch(e){ warning = warning || 'camera permission denied — streaming without the cam bubble.'; settings.cam = false; }
+    }
   }catch(err){
-    stopRaw();
+    cleanup();
     throw err;
   }
 
-  // ukuran canvas mengikuti layar yang dibagikan (maks lebar 1280 biar ringan)
-  const sw = sv.videoWidth || 1280, sh = sv.videoHeight || 720;
-  const k = Math.min(1, 1280 / sw);
-  const W = Math.round(sw * k), H = Math.round(sh * k);
+  // ---- canvas compositor ----
   const canvas = document.createElement('canvas');
-  canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
+  let filterCss = 'none';
+
+  function drawCover(v, W, H){
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if(!vw || !vh) return;
+    const s = Math.max(W / vw, H / vh);
+    const sw = W / s, sh = H / s;
+    ctx.drawImage(v, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, W, H);
+  }
+  function drawContain(v, W, H){
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if(!vw || !vh) return;
+    const s = Math.min(W / vw, H / vh);
+    const dw = vw * s, dh = vh * s;
+    ctx.drawImage(v, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  }
 
   function draw(){
+    const W = canvas.width, H = canvas.height;
+    ctx.filter = 'none';
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
-    // layar (diskalakan muat, tidak terpotong)
-    const vw = sv.videoWidth || W, vh = sv.videoHeight || H;
-    const sc = Math.min(W / vw, H / vh);
-    const dw = vw * sc, dh = vh * sc;
-    ctx.drawImage(sv, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    if(FILTER_OK) ctx.filter = filterCss;
 
-    // kamera bulat kecil di pojok kanan bawah
-    if(cv.videoWidth){
-      const r = Math.round(Math.min(W, H) * 0.14);
-      const cx = W - r - Math.round(W * 0.025);
-      const cy = H - r - Math.round(H * 0.04);
-      const side = Math.min(cv.videoWidth, cv.videoHeight);
-      const sx = (cv.videoWidth - side) / 2, sy = (cv.videoHeight - side) / 2;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(cv, sx, sy, side, side, cx - r, cy - r, r * 2, r * 2);
-      ctx.restore();
-      ctx.lineWidth = Math.max(3, Math.round(r * 0.06));
-      ctx.strokeStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
+    if(mode === 'camera'){
+      drawCover(camV, W, H);
+    }else{
+      drawContain(baseV, W, H);
+      if(camOn && camV.videoWidth){
+        // kamera bulat kecil di pojok kanan bawah
+        const r = Math.round(Math.min(W, H) * 0.15);
+        const cx = W - r - Math.round(W * 0.03);
+        const cy = H - r - Math.round(H * 0.04);
+        const side = Math.min(camV.videoWidth, camV.videoHeight);
+        const sx = (camV.videoWidth - side) / 2, sy = (camV.videoHeight - side) / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(camV, sx, sy, side, side, cx - r, cy - r, r * 2, r * 2);
+        ctx.restore();
+        ctx.filter = 'none';
+        ctx.lineWidth = Math.max(3, Math.round(r * 0.06));
+        ctx.strokeStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     }
+    ctx.filter = 'none';
   }
-  draw();
+
+  function setRatio(key){
+    const r = RATIOS[key] || RATIOS['16:9'];
+    canvas.width = r.w;
+    canvas.height = r.h;
+    fitBox(stLocalVideo, r.w, r.h);
+    draw();
+  }
+  function setFilter(id){
+    const f = FILTERS.find(x => x.id === id);
+    filterCss = f ? f.css : 'none';
+  }
+  setFilter(settings.filter);
+  setRatio(settings.ratio);
 
   // Timer lewat Web Worker: tab yang ditinggal (user pindah ke window yang dibagikan)
   // di-throttle browser, tapi timer di Worker tidak.
-  let worker = null, fallbackTimer = null;
   try{
     const blob = new Blob(['setInterval(function(){ postMessage(0); }, 33);'], { type: 'application/javascript' });
     worker = new Worker(URL.createObjectURL(blob));
@@ -401,14 +571,6 @@ async function getScreenCamSource(){
   }
 
   const out = canvas.captureStream(30);
-
-  // campur audio: mic + suara layar/tab
-  const dest = ac.createMediaStreamDestination();
-  [cam, screen].forEach(st => {
-    if(st.getAudioTracks().length){
-      ac.createMediaStreamSource(new MediaStream(st.getAudioTracks())).connect(dest);
-    }
-  });
   dest.stream.getAudioTracks().forEach(t => out.addTrack(t));
 
   stLocalVideo.srcObject = out;
@@ -417,58 +579,45 @@ async function getScreenCamSource(){
 
   return {
     stream: out,
-    endedTrack: screen.getVideoTracks()[0],
-    cleanup(){
-      if(worker){ worker.terminate(); }
-      if(fallbackTimer){ clearInterval(fallbackTimer); }
-      sv.srcObject = null; cv.srcObject = null;
-      stopRaw();
+    endedTrack: screenStream ? screenStream.getVideoTracks()[0] : null,
+    fileEl,
+    warning,
+    cleanup,
+    ctl: {
+      setRatio,
+      setFilter,
+      setFx,
+      setCam,
+      camOn: () => camOn,
+      setMuted(m){ master.gain.value = m ? 0 : 1; },
+      setLoop(l){ if(fileEl) fileEl.loop = l; },
+      togglePlay(){
+        if(!fileEl) return false;
+        if(fileEl.paused){ fileEl.play().catch(() => {}); return false; }
+        fileEl.pause();
+        return true;   // sekarang paused
+      }
     }
   };
 }
 
-async function getFileSource(file){
-  const url = URL.createObjectURL(file);
-  stLocalVideo.srcObject = null;
-  stLocalVideo.src = url;
-  stLocalVideo.loop = stLoop.checked;
-  stLocalVideo.muted = false;      // streamer bisa dengar; viewer dapat audionya sendiri
-  stLocalVideo.controls = true;    // play / pause / seek — viewer ikut
-  stLocalVideo.playsInline = true;
-
-  const resetEl = () => {
-    stLocalVideo.onplaying = null;
-    stLocalVideo.onerror = null;
-    stLocalVideo.onended = null;
-    stLocalVideo.pause();
-    stLocalVideo.removeAttribute('src');
-    stLocalVideo.load();
-    stLocalVideo.controls = false;
-    stLocalVideo.muted = true;
-    URL.revokeObjectURL(url);
-  };
-
-  try{
-    // track baru ada setelah elemen benar-benar playing
-    await new Promise((resolve, reject) => {
-      stLocalVideo.onplaying = resolve;
-      stLocalVideo.onerror = () => reject(new Error('cannot play this video file'));
-      stLocalVideo.play().catch(reject);
-    });
-    stLocalVideo.onplaying = null;
-    stLocalVideo.onerror = null;
-
-    const capture = stLocalVideo.captureStream || stLocalVideo.mozCaptureStream;
-    if(!capture) throw new Error('captureStream is not supported in this browser');
-    const stream = capture.call(stLocalVideo);
-    await waitForTracks(stream);
-    if(stream.getTracks().length === 0) throw new Error('no media tracks found in this file');
-
-    return { stream, cleanup: resetEl };
-  }catch(err){
-    resetEl();
-    throw err;
-  }
+// ===== UI helpers (tombol kontrol stream) =====
+function refreshCamBtn(){
+  stCamBtn.classList.toggle('active', settings.cam);
+  stCamBtn.innerHTML = settings.cam
+    ? '<i class="fa-solid fa-video"></i> <span class="txt">Cam on</span>'
+    : '<i class="fa-solid fa-video-slash"></i> <span class="txt">Cam off</span>';
+}
+function refreshMuteBtn(){
+  stMuteBtn.classList.toggle('active', settings.muted);
+  stMuteBtn.innerHTML = settings.muted
+    ? '<i class="fa-solid fa-microphone-slash"></i> <span class="txt">Unmute audio</span>'
+    : '<i class="fa-solid fa-microphone"></i> <span class="txt">Mute audio</span>';
+}
+function refreshPlayBtn(paused){
+  stFilePlayBtn.innerHTML = paused
+    ? '<i class="fa-solid fa-play"></i> <span class="txt">Play</span>'
+    : '<i class="fa-solid fa-pause"></i> <span class="txt">Pause</span>';
 }
 
 function setSourceMode(mode){
@@ -476,13 +625,13 @@ function setSourceMode(mode){
   stSrcCam.classList.toggle('active', mode === 'camera');
   stSrcFile.classList.toggle('active', mode === 'file');
   if(stSrcScreen) stSrcScreen.classList.toggle('active', mode === 'screen');
-  if(stSrcScreenCam) stSrcScreenCam.classList.toggle('active', mode === 'screencam');
   stFileBlock.style.display = mode === 'file' ? 'flex' : 'none';
+  // tombol Cam on/off hanya untuk share screen / share media (mode kamera sudah full camera)
+  stCamBtn.style.display = mode === 'camera' ? 'none' : '';
   setStatus(stBroadcastStatus,
-    mode === 'file'      ? 'choose a video file, then press start.' :
-    mode === 'screen'    ? 'press start, then pick a screen / window / tab to share (tick "share audio" for sound).' :
-    mode === 'screencam' ? 'press start, pick a screen / window / tab — your camera will show as a small bubble in the corner.' :
-                           'press start to turn on your camera and get a token.');
+    mode === 'file'   ? 'choose a video to share, then press start. tap "Cam" if you want your face in the corner.' :
+    mode === 'screen' ? 'press start, then pick a screen / window / tab to share (tick "share audio" for sound). tap "Cam" to show your face in the corner.' :
+                        'press start to turn on your camera and get a token.');
 }
 
 // ===== BROADCASTER =====
@@ -498,8 +647,8 @@ async function startBroadcast(){
     return;
   }
 
-  if(sourceMode === 'camera' && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)){
-    setStatus(stBroadcastStatus, 'camera access needs https — open the https:// address of the server.', 'warn');
+  if((sourceMode === 'camera' || sourceMode === 'screen') && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)){
+    setStatus(stBroadcastStatus, 'camera / mic access needs https — open the https:// address of the site.', 'warn');
     stStartBtn.disabled = false;
     return;
   }
@@ -510,23 +659,20 @@ async function startBroadcast(){
   }
 
   setStatus(stBroadcastStatus,
-    sourceMode === 'file' ? 'loading your video…' :
-    (sourceMode === 'screen' || sourceMode === 'screencam') ? 'waiting for you to pick what to share…' :
-                            'asking for camera & mic…');
+    sourceMode === 'file'   ? 'loading your video…' :
+    sourceMode === 'screen' ? 'waiting for you to pick what to share…' :
+                              'asking for camera & mic…');
 
   let source, localStream;
   try{
-    source = sourceMode === 'file'      ? await getFileSource(chosenFile)
-           : sourceMode === 'screen'    ? await getScreenSource()
-           : sourceMode === 'screencam' ? await getScreenCamSource()
-           :                              await getCameraSource();
+    source = await createSource(sourceMode, chosenFile);
     localStream = source.stream;
   }catch(err){
     console.error(err);
     setStatus(stBroadcastStatus,
-      sourceMode === 'file' ? 'could not play that file — try another video (mp4 / webm).' :
-      (sourceMode === 'screen' || sourceMode === 'screencam') ? 'screen share was cancelled, or the camera/mic permission was denied.' :
-                              'could not open camera/mic — check the browser permission.', 'warn');
+      sourceMode === 'file'   ? 'could not play that file — try another video (mp4 / webm).' :
+      sourceMode === 'screen' ? 'screen share was cancelled, or is not supported here.' :
+                                'could not open camera/mic — check the browser permission.', 'warn');
     stStartBtn.disabled = false;
     return;
   }
@@ -586,7 +732,7 @@ async function startBroadcast(){
     }
   };
 
-  // FIX: candidate dari viewer X hanya masuk ke koneksi viewer X
+  // candidate dari viewer X hanya masuk ke koneksi viewer X
   const onIce = ({ candidate, senderId }) => {
     const pc = peerConnections[senderId];
     if(pc) addCandidate(pc, candidate);
@@ -609,18 +755,26 @@ async function startBroadcast(){
     source.endedTrack.addEventListener('ended', () => { if(bc) stopBroadcast('screen share ended — broadcast stopped.'); });
   }
   // file video: kalau tidak loop & sudah habis, kasih info
-  if(sourceMode === 'file'){
-    stLocalVideo.onended = () => {
-      if(bc) setStatus(stBroadcastStatus, 'video finished — press stop, or seek back to play it again.', 'warn');
+  if(source.fileEl){
+    source.fileEl.onended = () => {
+      refreshPlayBtn(true);
+      if(bc) setStatus(stBroadcastStatus, 'video finished — press Play to watch again, or stop the broadcast.', 'warn');
     };
+    stFilePlayBtn.style.display = '';
+    refreshPlayBtn(false);
   }
+
+  settings.cam = source.ctl.camOn();
+  refreshCamBtn();
 
   stStopBtn.style.display = '';
   stStartBtn.style.display = 'none';
   stSourceRow.classList.add('locked');
-  stFileBlock.classList.add('locked');
+  stRatioRow.classList.add('locked');
+  stFileChoose.classList.add('locked');
   lockTabs();
   updateViewerCount();
+  if(source.warning) setStatus(stBroadcastStatus, source.warning, 'warn');
 }
 
 function stopBroadcast(message){
@@ -640,7 +794,11 @@ function stopBroadcast(message){
   stLocalVideo.srcObject = null;
   bc = null;
   stSourceRow.classList.remove('locked');
-  stFileBlock.classList.remove('locked');
+  stRatioRow.classList.remove('locked');
+  stFileChoose.classList.remove('locked');
+  stFilePlayBtn.style.display = 'none';
+  const r = RATIOS[settings.ratio];
+  fitBox(stLocalVideo, r.w, r.h);
 
   stToken.textContent = TOKEN_PLACEHOLDER;
   stStopBtn.style.display = 'none';
@@ -729,7 +887,7 @@ async function startView(roomId){
   session.onStreamEnded = onStreamEnded;
   session.onSignalError = onSignalError;
   session.waitTimer = setTimeout(() => {
-    setStatus(stViewerStatus, 'no stream yet — check the token, or the broadcaster may not be live.', 'warn');
+    setStatus(stViewerStatus, `no stream yet (${s.isPeer ? 'online' : 'local server'} mode) — check the token, or the broadcaster may not be live.`, 'warn');
   }, 10000);
   vw = session;
 
@@ -754,6 +912,7 @@ function leaveView(message, kind){
   }
   if(vw.pc){ vw.pc.onconnectionstatechange = null; vw.pc.close(); }
   stRemoteVideo.srcObject = null;
+  fitBox(stRemoteVideo, 16, 9);
   vw = null;
 
   stJoinBtn.style.display = '';
@@ -776,13 +935,6 @@ if(stSrcScreen){
     stSrcScreen.onclick = () => { if(!bc) setSourceMode('screen'); };
   }
 }
-if(stSrcScreenCam){
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
-    stSrcScreenCam.style.display = 'none';
-  }else{
-    stSrcScreenCam.onclick = () => { if(!bc) setSourceMode('screencam'); };
-  }
-}
 stFileInput.onchange = () => {
   const f = stFileInput.files && stFileInput.files[0];
   if(!f) return;
@@ -795,7 +947,73 @@ stFileInput.onchange = () => {
   stFileName.textContent = f.name;
   setStatus(stBroadcastStatus, 'ready — press start to go live with this video.');
 };
-stLoop.onchange = () => { stLocalVideo.loop = stLoop.checked; };
+stLoop.onchange = () => { if(bc) bc.source.ctl.setLoop(stLoop.checked); };
+stFilePlayBtn.onclick = () => {
+  if(!bc) return;
+  refreshPlayBtn(bc.source.ctl.togglePlay());
+};
+
+// Cam on/off (bubble kamera) — bisa dinyalakan / dimatikan kapan saja saat live
+stCamBtn.onclick = async () => {
+  const want = !settings.cam;
+  if(!bc){
+    settings.cam = want;
+    refreshCamBtn();
+    return;
+  }
+  stCamBtn.disabled = true;
+  try{
+    settings.cam = await bc.source.ctl.setCam(want);
+  }catch(err){
+    console.warn(err);
+    settings.cam = false;
+    setStatus(stBroadcastStatus, 'could not turn on the camera — check the browser permission.', 'warn');
+  }
+  stCamBtn.disabled = false;
+  refreshCamBtn();
+};
+
+// Mute semua suara yang keluar ke viewer
+stMuteBtn.onclick = () => {
+  settings.muted = !settings.muted;
+  if(bc) bc.source.ctl.setMuted(settings.muted);
+  refreshMuteBtn();
+};
+
+// Rasio (dikunci saat live)
+stRatioRow.querySelectorAll('[data-ratio]').forEach(btn => {
+  btn.onclick = () => {
+    if(bc) return;
+    settings.ratio = btn.dataset.ratio;
+    stRatioRow.querySelectorAll('[data-ratio]').forEach(b => b.classList.toggle('active', b === btn));
+    const r = RATIOS[settings.ratio];
+    fitBox(stLocalVideo, r.w, r.h);
+  };
+});
+
+// Filter
+if(!FILTER_OK){
+  stFilterBlock.style.display = 'none';   // browser tanpa ctx.filter (mis. Safari)
+}else{
+  FILTERS.forEach(f => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'filter-chip' + (f.id === settings.filter ? ' active' : '');
+    b.textContent = f.label;
+    b.onclick = () => {
+      settings.filter = f.id;
+      stFilterRow.querySelectorAll('.filter-chip').forEach(x => x.classList.toggle('active', x === b));
+      if(bc) bc.source.ctl.setFilter(f.id);
+    };
+    stFilterRow.appendChild(b);
+  });
+}
+
+// Voice effect (untuk mic)
+stFxSelect.onchange = () => {
+  settings.fx = stFxSelect.value;
+  if(bc) bc.source.ctl.setFx(settings.fx);
+};
 
 stStartBtn.onclick = startBroadcast;
 stStopBtn.onclick = () => stopBroadcast();
@@ -809,7 +1027,7 @@ stToken.onclick = () => {
 };
 
 function joinFromInput(){
-  const roomId = stTokenInput.value.trim();
+  const roomId = stTokenInput.value.trim().toLowerCase();
   if(!roomId){ setStatus(stViewerStatus, 'enter a token first.', 'warn'); return; }
   startView(roomId);
 }
@@ -817,10 +1035,18 @@ stJoinBtn.onclick = joinFromInput;
 stLeaveBtn.onclick = () => leaveView();
 stTokenInput.addEventListener('keydown', e => { if(e.key === 'Enter') joinFromInput(); });
 
+// kotak video viewer menyesuaikan rasio video yang masuk (16:9 / 9:16 / 3:4)
+const fitRemote = () => { if(stRemoteVideo.videoWidth) fitBox(stRemoteVideo, stRemoteVideo.videoWidth, stRemoteVideo.videoHeight); };
+stRemoteVideo.addEventListener('loadedmetadata', fitRemote);
+stRemoteVideo.addEventListener('resize', fitRemote);
+
 stToken.textContent = TOKEN_PLACEHOLDER;
+refreshCamBtn();
+refreshMuteBtn();
+setSourceMode('camera');
 switchStreamTab('broadcast');
 
-// siapkan signaling dari awal (di Vercel: load PeerJS di background) supaya
+// siapkan signaling dari awal (load PeerJS di background) supaya
 // pas tombol Start / Join ditekan sudah siap dan user gesture tidak hilang.
 prepareSignaling();
 })();

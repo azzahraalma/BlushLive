@@ -653,3 +653,30 @@ footer i{ color:var(--pink-500); }
   from{ opacity:0; transform:translateY(14px); }
   to{ opacity:1; transform:none; }
 }
+
+/* ===== Stream tools: cam, mute, ratio, filter, audio effect ===== */
+.stream-tools{
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:4px;
+}
+.stream-tools .mini-label{ margin-top:8px; margin-bottom:4px; text-align:center; }
+.stream-tools .filter-row{ justify-content:center; }
+.stream-tools .effect-select{ max-width:260px; }
+.stream-ctrl-row{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  justify-content:center;
+  width:100%;
+}
+.stream-ctrl-row .btn{ padding:8px 18px; font-size:13px; }
+.btn.outline.active{
+  background:var(--pink-500);
+  color:#fff;
+  border-color:var(--pink-500);
+}
+.filter-row.locked, .stream-file label.locked{ opacity:.5; pointer-events:none; }
+.stream-box{ transition: aspect-ratio .25s ease; }
